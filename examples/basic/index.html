@@ -4,8 +4,10 @@
   <meta charset="UTF-8">
   <title>VR Passthrough PoC</title>
   <link rel="stylesheet" href="style.css">
+  
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-  <script src="../../src/index.js"></script>
+  
+  <script type="module" src="../../src/index.js"></script>
 </head>
 <body>
   <div id="start-screen">
@@ -14,21 +16,29 @@
     <button id="start-btn">Start XR Mode</button>
   </div>
 
-  <div id="debug-panel" style="display: none;">
-    <div class="slider-group">
-      <label>barrel dist. (k1): <span id="k1-val">0.0</span></label>
-      <input type="range" id="k1-slider" min="-0.5" max="0.5" step="0.01" value="0.0">
-    </div>
-    <div class="slider-group">
-      <label>zoom level: <span id="zoom-val">1.0</span></label>
-      <input type="range" id="zoom-slider" min="0.5" max="3.0" step="0.1" value="1.0">
-    </div>
-  </div>
-
-  <a-scene xr-mode-ui="enabled: false"> <a-camera id="main-camera" xr-passthrough="k1: 0.0; zoom: 1.0;"></a-camera>
+  <a-scene xr-mode-ui="enabled: false"> 
+    <a-camera id="main-camera" xr-passthrough mxr-hand-tracking="maxHands: 1; delegate: GPU"></a-camera>
     
     <a-box position="0 1.5 -3" rotation="0 45 0" color="#4CC3D9"
            animation="property: rotation; to: 0 405 0; loop: true; dur: 3000"></a-box>
   </a-scene>
+
+  <script>
+    // é inicializada a lógica de interface do usuário
+    document.addEventListener('DOMContentLoaded', () => {
+      const startBtn = document.getElementById('start-btn');
+      const startScreen = document.getElementById('start-screen');
+      const cameraEl = document.getElementById('main-camera');
+
+      // é disparado o componente da biblioteca com um clique
+      startBtn.addEventListener('click', () => {
+        // o desenvolvedor chama a api pública do addon
+        cameraEl.components['xr-passthrough'].startCamera();
+        
+        // é ocultada a tela inicial
+        startScreen.style.display = 'none';
+      });
+    });
+  </script>
 </body>
 </html>
