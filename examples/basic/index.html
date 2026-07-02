@@ -2,41 +2,125 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>VR Passthrough PoC</title>
+  <title>VR Locomotion & Drag System</title>
   <link rel="stylesheet" href="style.css">
   
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-  
   <script type="module" src="../../src/index.js"></script>
 </head>
 <body>
   <div id="start-screen">
-    <h1>WebXR Passthrough</h1>
+    <h1>WebXR Hand Engine</h1>
     <p>Please allow camera access to continue.</p>
-    <button id="start-btn">Start XR Mode</button>
+    <button id="start-btn">Start VR Mode</button>
   </div>
 
   <a-scene xr-mode-ui="enabled: false"> 
-    <a-camera id="main-camera" xr-passthrough mxr-hand-tracking="maxHands: 1; delegate: GPU"></a-camera>
     
-    <a-box position="0 1.5 -3" rotation="0 45 0" color="#4CC3D9"
-           animation="property: rotation; to: 0 405 0; loop: true; dur: 3000"></a-box>
+    <a-sky color="#87CEEB"></a-sky>
+    
+    <a-plane 
+      position="0 0 0" 
+      rotation="-90 0 0" 
+      width="50" 
+      height="50" 
+      color="#808080"
+      material="roughness: 1; metalness: 0">
+    </a-plane>
+    <a-grid position="0 0.01 0"></a-grid>
+
+    <a-box 
+      id="target-cube"
+      class="grabbable"
+      position="0 1.5 -1.5" 
+      rotation="0 45 0" 
+      color="#4CC3D9"
+      animation="property: rotation; to: 0 405 0; loop: true; dur: 3000">
+    </a-box>
+
+    <a-entity id="camera-rig" position="0 1.6 0">
+      <a-camera 
+        id="main-camera" 
+        position="0 0 0"
+        mxr-hand-tracking="maxHands: 1" 
+        mxr-gesture-detector="source: #main-camera"
+        mxr-hand-model="source: #main-camera"
+        mxr-teleport="rig: #camera-rig; floorY: 0"
+        mxr-grabber="targetClass: .grabbable; grabRadius: 0.35">
+        
+        <a-text 
+          id="hud-text" 
+          value="Status: None" 
+          position="0 -0.5 -1" 
+          color="#FFF" 
+          align="center" 
+          width="2">
+        </a-text>
+      </a-camera>
+    </a-entity>
+    
   </a-scene>
 
   <script>
-    // é inicializada a lógica de interface do usuário
     document.addEventListener('DOMContentLoaded', () => {
       const startBtn = document.getElementById('start-btn');
       const startScreen = document.getElementById('start-screen');
       const cameraEl = document.getElementById('main-camera');
+      const hudText = document.getElementById('hud-text');
 
-      // é disparado o componente da biblioteca com um clique
+      let isAiming = false;
+
       startBtn.addEventListener('click', () => {
-        // o desenvolvedor chama a api pública do addon
-        cameraEl.components['xr-passthrough'].startCamera();
-        
-        // é ocultada a tela inicial
+        cameraEl.components['mxr-hand-tracking'].startTracking();
         startScreen.style.display = 'none';
+      });
+
+      cameraEl.addEventListener('mxr-teleport-aiming', () => {
+        isAiming = true;
+        hudText.setAttribute('value', 'AIMING (Pinch to Move, Rock to Cancel)');
+      });
+
+      cameraEl.addEventListener('mxr-teleport-canceled', () => {
+        isAiming = false;
+        hudText.setAttribute('value', 'Status: None');
+      });
+
+      cameraEl.addEventListener('mxr-grab-start', () => {
+        if (!isAiming) hudText.setAttribute('value', 'Status: GRAB');
+      });
+
+      cameraEl.addEventListener('mxr-grab-end', () => {
+        if (!isAiming) hudText.setAttribute('value', 'Status: None');
+      });
+
+      cameraEl.addEventListener('mxr-point-start', () => {
+        if (!isAiming) hudText.setAttribute('value', 'Status: POINT');
+      });
+
+      cameraEl.addEventListener('mxr-point-end', () => {
+        if (!isAiming) hudText.setAttribute('value', 'Status: None');
+      });
+
+      cameraEl.addEventListener('mxr-pinch-start', () => {
+        if (!isAiming) hudText.setAttribute('value', 'Status: PINCH');
+      });
+
+      cameraEl.addEventListener('mxr-pinch-end', () => {
+        if (!isAiming) hudText.setAttribute('value', 'Status: None');
+      });
+
+      cameraEl.addEventListener('mxr-hand-lost', () => {
+        if (!isAiming) hudText.setAttribute('value', 'Status: None');
+      });
+
+      cameraEl.addEventListener('mxr-grab-acquired', (e) => {
+        e.detail.el.setAttribute('color', '#00FF00');
+        hudText.setAttribute('value', 'Status: HOLDING OBJECT');
+      });
+
+      cameraEl.addEventListener('mxr-grab-released', (e) => {
+        e.detail.el.setAttribute('color', '#4CC3D9');
+        if (!isAiming) hudText.setAttribute('value', 'Status: None');
       });
     });
   </script>
