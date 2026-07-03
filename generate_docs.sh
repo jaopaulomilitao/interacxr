@@ -6,7 +6,7 @@ if [ -f "$output_file" ]; then
     rm "$output_file"
 fi
 
-# A estrutura estática inicial é escrita
+# é escrita a estrutura estática inicial do documento
 cat << 'EOF' >> "$output_file"
 # InteracXR: WebXR Hand Tracking & Interaction Engine
 
@@ -45,7 +45,7 @@ Develop a high-performance, low-cost WebXR hand-tracking library for mobile devi
 
 EOF
 
-# A árvore do projeto é desenhada de forma segura
+# é desenhada a árvore do projeto de forma segura
 printf '```text\n' >> "$output_file"
 find . -not -path '*/\.*' | sort | sed 's/[^/]*\//  /g' >> "$output_file"
 printf '```\n\n---\n\n' >> "$output_file"
@@ -69,7 +69,7 @@ for dir in "${scan_dirs[@]}"; do
                 syntax="css"
             fi
 
-            # O printf evita o bug de execução de backticks do bash
+            # é utilizado o printf para evitar o bug de execução de backticks do bash
             printf "### File: %s\n\n" "$file" >> "$output_file"
             printf '```%s\n' "$syntax" >> "$output_file"
             cat "$file" >> "$output_file"

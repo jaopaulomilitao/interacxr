@@ -4,16 +4,17 @@ AFRAME.registerComponent("mxr-hand-tracking", {
     delegate: { type: "string", default: "GPU" },
   },
 
-  init: function () {
+  init() {
     this.isProcessing = false;
     this.videoElement = null;
+    this.stream = null;
 
-    this.handCollider = document.createElement("a-box");
-    this.handCollider.setAttribute("color", "#00FF00");
-    this.handCollider.setAttribute("wireframe", "true");
-    this.handCollider.setAttribute("visible", "false");
-
-    this.el.appendChild(this.handCollider);
+    // a calibração agora baseia-se num plano físico em metros, ignorando o fov virtual
+    window.MXRCalibration = {
+      baseDepth: 0.5,
+      planeWidth: 0.8,
+      planeHeight: 0.45
+    };
 
     this.worker = new Worker(
       new URL("../workers/hand-worker.js", import.meta.url),
@@ -22,17 +23,14 @@ AFRAME.registerComponent("mxr-hand-tracking", {
 
     this.worker.onmessage = (event) => {
       const { type, landmarks } = event.data;
-      if (type === "RESULT") {
-        this.updateHandPosition(landmarks);
 
-        if (landmarks && landmarks.length > 0) {
-          this.el.emit("mxr-hand-data", { landmarks: landmarks[0] });
-        } else {
-          this.el.emit("mxr-hand-data", { landmarks: null });
-        }
+      if (type !== "RESULT") return;
 
-        this.isProcessing = false;
-      }
+      this.el.emit("mxr-hand-data", {
+        landmarks: landmarks?.length ? landmarks[0] : null,
+      });
+
+      this.isProcessing = false;
     };
 
     this.worker.postMessage({
@@ -42,81 +40,52 @@ AFRAME.registerComponent("mxr-hand-tracking", {
     });
   },
 
-  startTracking: async function () {
+  async startTracking() {
     try {
-      // the camera stream is requested internally for background ml processing
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: 1280, height: 720 }
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       });
 
       this.videoElement = document.createElement("video");
+      this.videoElement.srcObject = this.stream;
       this.videoElement.autoplay = true;
       this.videoElement.playsInline = true;
       this.videoElement.muted = true;
-      this.videoElement.srcObject = stream;
 
-      this.videoElement.onloadedmetadata = () => {
-        this.videoElement.play();
-        this.el.sceneEl.enterVR();
+      this.videoElement.onloadedmetadata = async () => {
+        // o aspecto é forçado para paisagem para corresponder ao uso do óculos vr
+        const w = this.videoElement.videoWidth;
+        const h = this.videoElement.videoHeight;
+        const max = Math.max(w, h);
+        const min = Math.min(w, h);
+        const aspect = max / min; 
+        
+        // um quadro de 45 centímetros de altura é projetado a 0.5m de distância
+        window.MXRCalibration.planeHeight = 0.45;
+        window.MXRCalibration.planeWidth = 0.45 * aspect;
+
+        await this.videoElement.play();
+        this.el.sceneEl.enterVR?.();
+
+        setTimeout(() => {
+          const cam = this.el.getObject3D("camera");
+          if (cam) cam.updateProjectionMatrix();
+        }, 500);
       };
-    } catch (error) {
-      console.error("camera access failed for tracking:", error);
+    } catch (err) {
+      console.error("[mxr-hand-tracking] Camera init failed:", err);
     }
   },
 
-  updateHandPosition: function (landmarks) {
-    if (!landmarks || landmarks.length === 0) {
-      this.handCollider.setAttribute("visible", "false");
+  async tick(time) {
+    if (!this.videoElement || this.isProcessing || this.videoElement.readyState < 2) {
       return;
     }
 
-    this.handCollider.setAttribute("visible", "true");
-
-    const hand = landmarks[0];
-    const cameraObj = this.el.getObject3D("camera");
-
-    if (!cameraObj) return;
-
-    let minX = 1, minY = 1, minZ = 1;
-    let maxX = 0, maxY = 0, maxZ = 0;
-
-    for (let i = 0; i < hand.length; i++) {
-      const lm = hand[i];
-      if (lm.x < minX) minX = lm.x;
-      if (lm.y < minY) minY = lm.y;
-      if (lm.z < minZ) minZ = lm.z;
-      if (lm.x > maxX) maxX = lm.x;
-      if (lm.y > maxY) maxY = lm.y;
-      if (lm.z > maxZ) maxZ = lm.z;
-    }
-
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    const cz = (minZ + maxZ) / 2;
-
-    const baseDepth = 0.5;
-    const vFov = (cameraObj.fov * Math.PI) / 180;
-    const frustumHeight = 2 * Math.tan(vFov / 2) * baseDepth;
-    const frustumWidth = frustumHeight * cameraObj.aspect;
-
-    const finalX = (cx - 0.5) * frustumWidth;
-    const finalY = -(cy - 0.5) * frustumHeight;
-    const finalZ = -baseDepth + cz * frustumWidth;
-
-    this.handCollider.setAttribute("position", `${finalX} ${finalY} ${finalZ}`);
-
-    const boxWidth = Math.max((maxX - minX) * frustumWidth, 0.05);
-    const boxHeight = Math.max((maxY - minY) * frustumHeight, 0.05);
-    const boxDepth = Math.max((maxZ - minZ) * frustumWidth, 0.05);
-
-    this.handCollider.setAttribute(
-      "scale",
-      `${boxWidth} ${boxHeight} ${boxDepth}`,
-    );
-  },
-
-  tick: async function (time) {
-    if (!this.videoElement || this.isProcessing) return;
     this.isProcessing = true;
 
     try {
@@ -125,8 +94,16 @@ AFRAME.registerComponent("mxr-hand-tracking", {
         { type: "PROCESS", image: bitmap, timestamp: time },
         [bitmap],
       );
-    } catch (e) {
+    } catch (err) {
+      console.warn("[mxr-hand-tracking] Frame skipped:", err);
       this.isProcessing = false;
     }
+  },
+
+  remove() {
+    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    if (this.worker) this.worker.terminate();
+    this.videoElement = null;
+    this.stream = null;
   },
 });

@@ -3,20 +3,6 @@
 ## 1. Project Objective
 Develop a high-performance, low-cost WebXR hand-tracking library for mobile devices using MediaPipe and A-Frame. The focus is to democratize immersive virtual reality (VR) interactions, such as spatial manipulation and locomotion, without the need for expensive dedicated headsets (e.g., Meta Quest).
 
-## 2. Progress Tracker
-
-### 2.1. What Has Been Done
-* Implementation of the core hand-tracking engine via Web Workers (`mxr-hand-tracking.js`).
-* Creation of a robust Gesture State Machine (`mxr-gesture-detector.js`) identifying: Point, Grab, Pinch, Rock, and Gun.
-* Integration of mathematical Jitter reduction (Hysteresis) and state exclusivity.
-* Development of a parabolic locomotion system (`mxr-teleport.js`) using kinematic physics and Difference Blending.
-* Implementation of a long-distance object manipulation system (`mxr-laser-grabber.js`) using Raycasting.
-* Isolation of the VR environment to ensure stable 60 FPS on mobile hardware.
-
-### 2.2. What Needs To Be Done
-* Integrate 3D hand models to replace the wireframe/laser visualizer.
-* Fine-tune the physics and colliders for the grabbed objects.
-* Write the academic article mapping the architecture.
 
 ---
 
@@ -45,13 +31,15 @@ Develop a high-performance, low-cost WebXR hand-tracking library for mobile devi
   project_review.md
   src
     components
-      mxr-debug-collision.js
+      mxr-gaze-grabber.js
       mxr-gesture-detector.js
-      mxr-grabber.js
+      mxr-hand-model.js
       mxr-hand-tracking.js
-      mxr-laser-grabber.js
+      mxr-hud.js
       mxr-teleport.js
       xr-passthrough.js
+    core
+      mxr-interaction-manager.js
     index.js
     shaders
       passthrough-shader.js
@@ -64,41 +52,498 @@ Develop a high-performance, low-cost WebXR hand-tracking library for mobile devi
 
 ## 5. Codebase Files
 
-### File: src/components/mxr-debug-collision.js
+### File: src/components/mxr-gaze-grabber.js
 
 ```javascript
-import * as THREE from 'three';
-
-AFRAME.registerComponent('mxr-debug-collision', {
+AFRAME.registerComponent("mxr-gaze-grabber", {
   schema: {
-    handTracker: { type: 'selector', default: '#main-camera' },
-    threshold: { type: 'number', default: 0.3 }
+    targetClass: {
+      type: "string",
+      default: ".grabbable",
+    },
+
+    activationPose: {
+      type: "string",
+      default: "victory",
+    },
+
+    grabPose: {
+      type: "string",
+      default: "grab",
+    },
+
+    hoverOpacity: {
+      type: "number",
+      default: 0.45,
+    },
+
+    grabOpacity: {
+      type: "number",
+      default: 0.35,
+    },
+
+    grabSmoothing: {
+      type: "number",
+      default: 0.2,
+    },
+
+    maxDistance: {
+      type: "number",
+      default: 10,
+    },
+
+    showCursor: {
+      type: "boolean",
+      default: true,
+    },
+
+    cursorSize: {
+      type: "number",
+      default: 0.01,
+    },
+
+    cursorColor: {
+      type: "color",
+      default: "#FFFFFF",
+    },
+
+    showHUD: {
+      type: "boolean",
+      default: true,
+    },
   },
 
-  tick: function () {
-    const trackerComponent = this.data.handTracker.components['mxr-hand-tracking'];
-    if (!trackerComponent || !trackerComponent.handCollider) return;
+  init() {
+    this.isAiming = false;
 
-    if (trackerComponent.handCollider.getAttribute('visible') === 'false') {
-      this.el.setAttribute('color', '#4CC3D9');
+    this.hoveredElement = null;
+
+    this.grabbedElement = null;
+
+    this.lockedDistance = 0;
+
+    this.cameraPosition = new THREE.Vector3();
+
+    this.cameraDirection = new THREE.Vector3();
+
+    this.targetPosition = new THREE.Vector3();
+
+    this.raycaster = new THREE.Raycaster();
+
+    this.originalMaterials = new WeakMap();
+
+    this.cursor = this.createCursor();
+
+    if (this.data.showHUD) {
+      this.createHUD();
+    }
+
+    this.bindEvents();
+  },
+
+  createCursor() {
+    const geometry = new THREE.RingGeometry(
+      this.data.cursorSize,
+
+      this.data.cursorSize * 1.5,
+
+      32,
+    );
+
+    const material = new THREE.MeshBasicMaterial({
+      color: this.data.cursorColor,
+
+      transparent: true,
+
+      opacity: 0.9,
+
+      depthTest: false,
+
+      side: THREE.DoubleSide,
+    });
+
+    const mesh = new THREE.Mesh(
+      geometry,
+
+      material,
+    );
+
+    mesh.position.set(
+      0,
+
+      0,
+
+      -1,
+    );
+
+    mesh.visible = false;
+
+    this.el.object3D.add(mesh);
+
+    return mesh;
+  },
+
+  createHUD() {
+    this.hud = document.createElement("a-text");
+
+    this.hud.setAttribute(
+      "position",
+
+      "0 -0.45 -1",
+    );
+
+    this.hud.setAttribute(
+      "align",
+
+      "center",
+    );
+
+    this.hud.setAttribute(
+      "width",
+
+      "2",
+    );
+
+    this.hud.setAttribute(
+      "value",
+
+      "Idle",
+    );
+
+    this.hud.setAttribute(
+      "color",
+
+      "#FFFFFF",
+    );
+
+    this.el.appendChild(this.hud);
+  },
+
+  setHUD(text) {
+    if (!this.hud) return;
+
+    this.hud.setAttribute(
+      "value",
+
+      text,
+    );
+  },
+
+  bindEvents() {
+    this.onAimStart = this.onAimStart.bind(this);
+
+    this.onAimEnd = this.onAimEnd.bind(this);
+
+    this.onGrabStart = this.onGrabStart.bind(this);
+
+    this.onGrabEnd = this.onGrabEnd.bind(this);
+
+    this.onHandLost = this.onHandLost.bind(this);
+
+    this.el.addEventListener(
+      `mxr-${this.data.activationPose}-start`,
+
+      this.onAimStart,
+    );
+
+    this.el.addEventListener(
+      `mxr-${this.data.activationPose}-end`,
+
+      this.onAimEnd,
+    );
+
+    this.el.addEventListener(
+      `mxr-${this.data.grabPose}-start`,
+
+      this.onGrabStart,
+    );
+
+    this.el.addEventListener(
+      `mxr-${this.data.grabPose}-end`,
+
+      this.onGrabEnd,
+    );
+
+    this.el.addEventListener(
+      "mxr-hand-lost",
+
+      this.onHandLost,
+    );
+  },
+
+  remove() {
+    this.el.removeEventListener(
+      `mxr-${this.data.activationPose}-start`,
+
+      this.onAimStart,
+    );
+
+    this.el.removeEventListener(
+      `mxr-${this.data.activationPose}-end`,
+
+      this.onAimEnd,
+    );
+
+    this.el.removeEventListener(
+      `mxr-${this.data.grabPose}-start`,
+
+      this.onGrabStart,
+    );
+
+    this.el.removeEventListener(
+      `mxr-${this.data.grabPose}-end`,
+
+      this.onGrabEnd,
+    );
+
+    this.el.removeEventListener(
+      "mxr-hand-lost",
+
+      this.onHandLost,
+    );
+  },
+
+  onAimStart() {
+    if (
+      !MXRInteractionManager.request(
+        "grab",
+
+        this,
+      )
+    ) {
       return;
     }
 
-    const cubeWorldPos = new THREE.Vector3();
-    this.el.object3D.getWorldPosition(cubeWorldPos);
+    this.isAiming = true;
 
-    const handWorldPos = new THREE.Vector3();
-    trackerComponent.handCollider.object3D.getWorldPosition(handWorldPos);
+    this.cursor.visible = true;
 
-    const distance = cubeWorldPos.distanceTo(handWorldPos);
+    this.setHUD("Aiming");
+  },
 
-    if (distance < this.data.threshold) {
-      this.el.setAttribute('color', '#FF0000'); 
-    } else {
-      this.el.setAttribute('color', '#4CC3D9');
+  onAimEnd() {
+    if (this.grabbedElement) {
+      return;
     }
-  }
+
+    this.isAiming = false;
+
+    this.cursor.visible = false;
+
+    this.clearHover();
+
+    MXRInteractionManager.release(this);
+
+    this.setHUD("Idle");
+  },
+
+  onGrabStart() {
+    if (!this.hoveredElement) {
+      return;
+    }
+
+    this.grabbedElement = this.hoveredElement;
+
+    const cameraObj = this.el.getObject3D("camera");
+
+    const worldPos = new THREE.Vector3();
+
+    cameraObj.getWorldPosition(this.cameraPosition);
+
+    this.grabbedElement.object3D.getWorldPosition(worldPos);
+
+    this.lockedDistance = worldPos.distanceTo(this.cameraPosition);
+
+    this.applyGrabMaterial(this.grabbedElement);
+
+    this.setHUD("Holding");
+  },
+
+  onGrabEnd() {
+    if (!this.grabbedElement) {
+      return;
+    }
+
+    this.restoreMaterial(this.grabbedElement);
+
+    this.grabbedElement = null;
+
+    this.isAiming = false;
+
+    this.cursor.visible = false;
+
+    this.clearHover();
+
+    MXRInteractionManager.release(this);
+
+    this.setHUD("Idle");
+  },
+
+  onHandLost() {
+    this.onGrabEnd();
+
+    this.onAimEnd();
+  },
+
+  saveMaterial(el) {
+    if (this.originalMaterials.has(el)) {
+      return;
+    }
+
+    const mesh = el.getObject3D("mesh");
+
+    if (!mesh || !mesh.material) {
+      return;
+    }
+
+    this.originalMaterials.set(
+      el,
+
+      {
+        opacity: mesh.material.opacity,
+
+        transparent: mesh.material.transparent,
+      },
+    );
+  },
+
+  restoreMaterial(el) {
+    const mesh = el.getObject3D("mesh");
+
+    const data = this.originalMaterials.get(el);
+
+    if (!mesh || !mesh.material || !data) {
+      return;
+    }
+
+    mesh.material.opacity = data.opacity;
+
+    mesh.material.transparent = data.transparent;
+  },
+
+  applyGrabMaterial(el) {
+    const mesh = el.getObject3D("mesh");
+
+    if (!mesh || !mesh.material) {
+      return;
+    }
+
+    this.saveMaterial(el);
+
+    mesh.material.opacity = this.data.grabOpacity;
+
+    mesh.material.transparent = true;
+  },
+
+  setHover(el) {
+    if (this.hoveredElement === el) {
+      return;
+    }
+
+    this.clearHover();
+
+    this.hoveredElement = el;
+
+    this.saveMaterial(el);
+  },
+
+  clearHover() {
+    if (!this.hoveredElement) {
+      return;
+    }
+
+    if (this.hoveredElement !== this.grabbedElement) {
+      this.restoreMaterial(this.hoveredElement);
+    }
+
+    this.hoveredElement = null;
+  },
+
+  tick() {
+    const camera = this.el.getObject3D("camera");
+
+    if (!camera) {
+      return;
+    }
+
+    camera.getWorldPosition(this.cameraPosition);
+
+    camera.getWorldDirection(this.cameraDirection);
+
+    if (this.isAiming && !this.grabbedElement) {
+      this.raycaster.set(
+        this.cameraPosition,
+
+        this.cameraDirection,
+      );
+
+      const objects = Array.from(
+        this.el.sceneEl.querySelectorAll(this.data.targetClass),
+      )
+
+        .map((e) => e.object3D)
+
+        .filter(Boolean);
+
+      const intersections = this.raycaster.intersectObjects(
+        objects,
+
+        true,
+      );
+
+      if (intersections.length) {
+        let hit = intersections[0].object;
+
+        while (hit.parent && !hit.el) {
+          hit = hit.parent;
+        }
+
+        this.setHover(hit.el);
+      } else {
+        this.clearHover();
+      }
+    }
+
+    if (this.hoveredElement && !this.grabbedElement) {
+      const mesh = this.hoveredElement.getObject3D("mesh");
+
+      if (mesh && mesh.material) {
+        const pulse = 0.65 + Math.sin(performance.now() * 0.005) * 0.2;
+
+        mesh.material.opacity = pulse;
+
+        mesh.material.transparent = true;
+      }
+    }
+
+    if (this.grabbedElement) {
+      this.targetPosition.copy(this.cameraPosition);
+
+      this.targetPosition.add(
+        this.cameraDirection
+
+          .clone()
+
+          .multiplyScalar(this.lockedDistance),
+      );
+
+      const pos = this.grabbedElement.object3D.position;
+
+      pos.lerp(
+        this.targetPosition,
+
+        this.data.grabSmoothing,
+      );
+
+      this.grabbedElement.setAttribute(
+        "position",
+
+        `${pos.x} ${pos.y} ${pos.z}`,
+      );
+    }
+  },
 });
+
 ```
 
 ---
@@ -106,248 +551,460 @@ AFRAME.registerComponent('mxr-debug-collision', {
 ### File: src/components/mxr-gesture-detector.js
 
 ```javascript
-AFRAME.registerComponent('mxr-gesture-detector', {
+AFRAME.registerComponent("mxr-gesture-detector", {
   schema: {
-    source: { type: 'selector', default: '#main-camera' }
+    source: {
+      type: "selector",
+      default: "#main-camera",
+    },
   },
 
-  init: function () {
-    this.gestureStates = { pinch: false, grab: false, point: false, rock: false };
-    this.onHandData = this.onHandData.bind(this);
-    
-    if (this.data.source) {
-      this.data.source.addEventListener('mxr-hand-data', this.onHandData);
-    }
-  },
+  init() {
+    this.states = {
+      grab: false,
 
-  remove: function () {
-    if (this.data.source) {
-      this.data.source.removeEventListener('mxr-hand-data', this.onHandData);
-    }
-  },
+      victory: false,
 
-  resetGestures: function () {
-    if (this.gestureStates.grab) {
-      this.gestureStates.grab = false;
-      this.el.emit('mxr-grab-end');
-    }
-    if (this.gestureStates.point) {
-      this.gestureStates.point = false;
-      this.el.emit('mxr-point-end', { position: null });
-    }
-    if (this.gestureStates.pinch) {
-      this.gestureStates.pinch = false;
-      this.el.emit('mxr-pinch-end', { distance: 0, position: null });
-    }
-    if (this.gestureStates.rock) {
-      this.gestureStates.rock = false;
-      this.el.emit('mxr-rock-end');
-    }
-    
-    this.el.emit('mxr-hand-lost');
-  },
+      rock: false,
 
-  getWorldPosition: function (landmark) {
-    const cameraObj = this.data.source.getObject3D('camera');
-    if (!cameraObj) return null;
+      point: false,
 
-    const baseDepth = 0.5;
-    const vFov = (cameraObj.fov * Math.PI) / 180;
-    const frustumHeight = 2 * Math.tan(vFov / 2) * baseDepth;
-    const frustumWidth = frustumHeight * cameraObj.aspect;
-
-    return {
-      x: (landmark.x - 0.5) * frustumWidth,
-      y: -(landmark.y - 0.5) * frustumHeight,
-      z: -baseDepth + (landmark.z * frustumWidth)
+      pinch: false,
     };
+
+    this.onHandData = this.onHandData.bind(this);
+
+    this.data.source.addEventListener(
+      "mxr-hand-data",
+
+      this.onHandData,
+    );
   },
 
-  onHandData: function (event) {
-    const hand = event.detail.landmarks;
-    
-    if (!hand) {
-      this.resetGestures();
+  remove() {
+    this.data.source.removeEventListener(
+      "mxr-hand-data",
+
+      this.onHandData,
+    );
+  },
+
+  emitPose(name, state, payload = {}) {
+    const start = `mxr-${name}-start`;
+
+    const move = `mxr-${name}-move`;
+
+    const end = `mxr-${name}-end`;
+
+    if (state && !this.states[name]) {
+      this.states[name] = true;
+
+      this.el.emit(
+        start,
+
+        payload,
+      );
+
       return;
     }
 
-    const getDistance = (p1, p2) => Math.sqrt(
-      Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2) + Math.pow(p1.z - p2.z, 2)
+    if (state && this.states[name]) {
+      this.el.emit(
+        move,
+
+        payload,
+      );
+
+      return;
+    }
+
+    if (!state && this.states[name]) {
+      this.states[name] = false;
+
+      this.el.emit(
+        end,
+
+        payload,
+      );
+    }
+  },
+
+  reset() {
+    Object.keys(this.states).forEach((pose) => {
+      if (this.states[pose]) {
+        this.states[pose] = false;
+
+        this.el.emit(`mxr-${pose}-end`);
+      }
+    });
+
+    this.el.emit("mxr-hand-lost");
+  },
+
+  distance(a, b) {
+    return Math.sqrt(
+      Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2) + Math.pow(a.z - b.z, 2),
     );
+  },
+
+  onHandData(event) {
+    const hand = event.detail.landmarks;
+
+    if (!hand) {
+      this.reset();
+
+      return;
+    }
 
     const wrist = hand[0];
-    
-    const isIndexOpen = getDistance(hand[8], wrist) > getDistance(hand[6], wrist);
-    const isMiddleOpen = getDistance(hand[12], wrist) > getDistance(hand[10], wrist);
-    const isRingOpen = getDistance(hand[16], wrist) > getDistance(hand[14], wrist);
-    const isPinkyOpen = getDistance(hand[20], wrist) > getDistance(hand[18], wrist);
 
-    const isGrabbing = !isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen;
-    if (isGrabbing && !this.gestureStates.grab) {
-      this.gestureStates.grab = true;
-      this.el.emit('mxr-grab-start');
-    } else if (!isGrabbing && this.gestureStates.grab) {
-      this.gestureStates.grab = false;
-      this.el.emit('mxr-grab-end');
-    }
+    const index =
+      this.distance(
+        hand[8],
 
-    const isRocking = isIndexOpen && !isMiddleOpen && !isRingOpen && isPinkyOpen;
-    if (isRocking && !this.gestureStates.rock) {
-      this.gestureStates.rock = true;
-      this.el.emit('mxr-rock-start');
-    } else if (!isRocking && this.gestureStates.rock) {
-      this.gestureStates.rock = false;
-      this.el.emit('mxr-rock-end');
-    }
+        wrist,
+      ) >
+      this.distance(
+        hand[6],
 
-    const isPointing = isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen;
-    let indexWorldPos = null;
+        wrist,
+      );
 
-    if (isPointing || this.gestureStates.point) {
-      indexWorldPos = this.getWorldPosition(hand[8]);
-    }
+    const middle =
+      this.distance(
+        hand[12],
 
-    if (isPointing && !this.gestureStates.point) {
-      this.gestureStates.point = true;
-      this.el.emit('mxr-point-start', { position: indexWorldPos });
-    } else if (!isPointing && this.gestureStates.point) {
-      this.gestureStates.point = false;
-      this.el.emit('mxr-point-end', { position: indexWorldPos });
-    }
+        wrist,
+      ) >
+      this.distance(
+        hand[10],
 
-    if (this.gestureStates.point && indexWorldPos) {
-      this.el.emit('mxr-point-move', { position: indexWorldPos });
-    }
+        wrist,
+      );
 
-    const pinchDistance = getDistance(hand[4], hand[8]);
-    let isPinching = this.gestureStates.pinch;
+    const ring =
+      this.distance(
+        hand[16],
 
-    if (!isGrabbing && !isRocking) {
-      if (!isPinching && pinchDistance < 0.04) {
-        isPinching = true;
-      } else if (isPinching && pinchDistance > 0.06) {
-        isPinching = false;
-      }
-    } else {
-      isPinching = false;
-    }
+        wrist,
+      ) >
+      this.distance(
+        hand[14],
 
-    const pinchCenter = {
-      x: (hand[4].x + hand[8].x) / 2,
-      y: (hand[4].y + hand[8].y) / 2,
-      z: (hand[4].z + hand[8].z) / 2
-    };
-    
-    let pinchWorldPos = null;
-    if (isPinching || this.gestureStates.pinch) {
-      pinchWorldPos = this.getWorldPosition(pinchCenter);
-    }
+        wrist,
+      );
 
-    if (isPinching && !this.gestureStates.pinch) {
-      this.gestureStates.pinch = true;
-      this.el.emit('mxr-pinch-start', { distance: pinchDistance, position: pinchWorldPos });
-    } else if (!isPinching && this.gestureStates.pinch) {
-      this.gestureStates.pinch = false;
-      this.el.emit('mxr-pinch-end', { distance: pinchDistance, position: pinchWorldPos });
-    }
+    const pinky =
+      this.distance(
+        hand[20],
 
-    if (this.gestureStates.pinch) {
-      this.el.emit('mxr-pinch-move', { distance: pinchDistance, position: pinchWorldPos });
-    }
-  }
+        wrist,
+      ) >
+      this.distance(
+        hand[18],
+
+        wrist,
+      );
+
+    const grab = !index && !middle && !ring && !pinky;
+
+    const victory = index && middle && !ring && !pinky;
+
+    const rock = index && pinky && !middle && !ring;
+
+    const point = index && !middle && !ring && !pinky;
+
+    const pinch =
+      this.distance(
+        hand[4],
+
+        hand[8],
+      ) < 0.04;
+
+    this.emitPose(
+      "grab",
+
+      grab,
+    );
+
+    this.emitPose(
+      "victory",
+
+      victory,
+    );
+
+    this.emitPose(
+      "rock",
+
+      rock,
+    );
+
+    this.emitPose(
+      "point",
+
+      point,
+    );
+
+    this.emitPose(
+      "pinch",
+
+      pinch,
+    );
+  },
 });
+
 ```
 
 ---
 
-### File: src/components/mxr-grabber.js
+### File: src/components/mxr-hand-model.js
 
 ```javascript
-AFRAME.registerComponent('mxr-grabber', {
+AFRAME.registerComponent("mxr-hand-model", {
   schema: {
-    targetClass: { type: 'string', default: '.grabbable' },
-    grabRadius: { type: 'number', default: 0.3 }
+    source: { type: "selector" },
+
+    jointRadius: { default: 0.012 },
+
+    jointSmoothing: { default: 0.35 },
+
+    boneRadius: { default: 0.004 },
   },
 
-  init: function () {
-    this.grabbedEl = null;
-    this.offset = new THREE.Vector3();
-    this.handLocalPos = new THREE.Vector3();
+  init() {
+    this.joints = [];
 
-    this.onPinchStart = this.onPinchStart.bind(this);
-    this.onPinchEnd = this.onPinchEnd.bind(this);
-    this.onPinchMove = this.onPinchMove.bind(this);
-    this.onHandLost = this.onPinchEnd.bind(this);
+    this.bones = [];
 
-    this.el.addEventListener('mxr-pinch-start', this.onPinchStart);
-    this.el.addEventListener('mxr-pinch-end', this.onPinchEnd);
-    this.el.addEventListener('mxr-pinch-move', this.onPinchMove);
-    this.el.addEventListener('mxr-hand-lost', this.onHandLost);
+    this.targets = [];
+
+    this.handVisible = false;
+
+    this.tmpMid = new THREE.Vector3();
+
+    this.tmpDir = new THREE.Vector3();
+
+    this.up = new THREE.Vector3(0, 1, 0);
+
+    this.onHandData = this.onHandData.bind(this);
+
+    const jointMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+    });
+
+    const boneMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+    });
+
+    for (let i = 0; i < 21; i++) {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(this.data.jointRadius, 12, 12),
+
+        jointMaterial,
+      );
+
+      mesh.visible = false;
+
+      this.el.object3D.add(mesh);
+
+      this.joints.push(mesh);
+
+      this.targets.push(new THREE.Vector3());
+    }
+
+    this.connections = [
+      [0, 1],
+      [1, 2],
+      [2, 3],
+      [3, 4],
+
+      [0, 5],
+      [5, 6],
+      [6, 7],
+      [7, 8],
+
+      [0, 9],
+      [9, 10],
+      [10, 11],
+      [11, 12],
+
+      [0, 13],
+      [13, 14],
+      [14, 15],
+      [15, 16],
+
+      [0, 17],
+      [17, 18],
+      [18, 19],
+      [19, 20],
+    ];
+
+    this.connections.forEach(() => {
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(
+          this.data.boneRadius,
+
+          this.data.boneRadius,
+
+          1,
+
+          8,
+        ),
+
+        boneMaterial,
+      );
+
+      mesh.visible = false;
+
+      this.el.object3D.add(mesh);
+
+      this.bones.push(mesh);
+    });
+
+    this.data.source.addEventListener(
+      "mxr-hand-data",
+
+      this.onHandData,
+    );
   },
 
-  remove: function () {
-    this.el.removeEventListener('mxr-pinch-start', this.onPinchStart);
-    this.el.removeEventListener('mxr-pinch-end', this.onPinchEnd);
-    this.el.removeEventListener('mxr-pinch-move', this.onPinchMove);
-    this.el.removeEventListener('mxr-hand-lost', this.onHandLost);
+  remove() {
+    this.data.source.removeEventListener(
+      "mxr-hand-data",
+
+      this.onHandData,
+    );
   },
 
-  onPinchStart: function (event) {
-    if (!event.detail.position || this.grabbedEl) return;
-    
-    this.handLocalPos.copy(event.detail.position);
+  mapPoint(lm) {
+    const camera = this.el.sceneEl.camera;
 
-    const cameraObj = this.el.getObject3D('camera');
-    if (!cameraObj) return;
+    const calibration = window.MXRCalibration;
 
-    const worldHandPos = this.handLocalPos.clone().applyMatrix4(cameraObj.matrixWorld);
-    const interactables = this.el.sceneEl.querySelectorAll(this.data.targetClass);
+    const depth = calibration.baseDepth;
 
-    let closest = null;
-    let minDistance = this.data.grabRadius;
+    const aspect = calibration.aspect;
 
-    for (let i = 0; i < interactables.length; i++) {
-      const el = interactables[i];
-      if (!el.object3D) continue;
+    const xScale = calibration.xScale || 1;
 
-      const dist = el.object3D.position.distanceTo(worldHandPos);
-      if (dist < minDistance) {
-        minDistance = dist;
-        closest = el;
+    const yScale = calibration.yScale || 1;
+
+    const vfov = THREE.MathUtils.degToRad(camera.fov);
+
+    const visibleHeight = 2 * Math.tan(vfov * 0.5) * depth;
+
+    const visibleWidth = visibleHeight * aspect;
+
+    const x = (lm.x - 0.5) * visibleWidth * xScale;
+
+    const y = -(lm.y - 0.5) * visibleHeight * yScale;
+
+    const z = -depth + lm.z * visibleWidth;
+
+    return new THREE.Vector3(
+      x,
+
+      y,
+
+      z,
+    );
+  },
+
+  onHandData(e) {
+    const hand = e.detail.landmarks;
+
+    if (!hand) {
+      this.handVisible = false;
+
+      this.joints.forEach((j) => {
+        j.visible = false;
+      });
+
+      this.bones.forEach((b) => {
+        b.visible = false;
+      });
+
+      for (let i = 0; i < 21; i++) {
+        this.targets[i].set(
+          0,
+
+          0,
+
+          0,
+        );
       }
+
+      return;
     }
 
-    if (closest) {
-      this.grabbedEl = closest;
-      this.offset.copy(this.grabbedEl.object3D.position).sub(worldHandPos);
-      this.el.emit('mxr-grab-acquired', { el: this.grabbedEl });
-    }
-  },
+    this.handVisible = true;
 
-  onPinchMove: function (event) {
-    if (!this.grabbedEl || !event.detail.position) return;
-    this.handLocalPos.copy(event.detail.position);
-  },
-
-  onPinchEnd: function () {
-    if (this.grabbedEl) {
-      this.el.emit('mxr-grab-released', { el: this.grabbedEl });
-      this.grabbedEl = null;
+    for (let i = 0; i < 21; i++) {
+      this.targets[i].copy(this.mapPoint(hand[i]));
     }
   },
 
-  tick: function () {
-    if (this.grabbedEl) {
-      const cameraObj = this.el.getObject3D('camera');
-      if (!cameraObj) return;
-
-      const worldHandPos = this.handLocalPos.clone().applyMatrix4(cameraObj.matrixWorld);
-      const newPos = worldHandPos.add(this.offset);
-      
-      this.grabbedEl.setAttribute('position', `${newPos.x} ${newPos.y} ${newPos.z}`);
+  tick() {
+    if (!this.handVisible) {
+      return;
     }
-  }
+
+    for (let i = 0; i < 21; i++) {
+      const mesh = this.joints[i];
+
+      mesh.visible = true;
+
+      mesh.position.lerp(
+        this.targets[i],
+
+        this.data.jointSmoothing,
+      );
+    }
+
+    for (let i = 0; i < this.connections.length; i++) {
+      const bone = this.bones[i];
+
+      const a = this.joints[this.connections[i][0]];
+
+      const b = this.joints[this.connections[i][1]];
+
+      bone.visible = true;
+
+      this.tmpMid
+
+        .addVectors(
+          a.position,
+
+          b.position,
+        )
+
+        .multiplyScalar(0.5);
+
+      bone.position.copy(this.tmpMid);
+
+      this.tmpDir.subVectors(
+        b.position,
+
+        a.position,
+      );
+
+      bone.scale.set(
+        1,
+
+        this.tmpDir.length(),
+
+        1,
+      );
+
+      bone.quaternion.setFromUnitVectors(
+        this.up,
+
+        this.tmpDir.normalize(),
+      );
+    }
+  },
 });
+
 ```
 
 ---
@@ -361,16 +1018,24 @@ AFRAME.registerComponent("mxr-hand-tracking", {
     delegate: { type: "string", default: "GPU" },
   },
 
-  init: function () {
+  init() {
     this.isProcessing = false;
     this.videoElement = null;
+    this.stream = null;
 
-    this.handCollider = document.createElement("a-box");
-    this.handCollider.setAttribute("color", "#00FF00");
-    this.handCollider.setAttribute("wireframe", "true");
-    this.handCollider.setAttribute("visible", "false");
+    window.MXRCalibration = {
+      aspect: 16 / 9,
 
-    this.el.appendChild(this.handCollider);
+      cameraAspect: 16 / 9,
+
+      viewportAspect: 1,
+
+      baseDepth: 0.5,
+
+      xScale: 1.2,
+
+      yScale: 1.0,
+    };
 
     this.worker = new Worker(
       new URL("../workers/hand-worker.js", import.meta.url),
@@ -379,17 +1044,14 @@ AFRAME.registerComponent("mxr-hand-tracking", {
 
     this.worker.onmessage = (event) => {
       const { type, landmarks } = event.data;
-      if (type === "RESULT") {
-        this.updateHandPosition(landmarks);
 
-        if (landmarks && landmarks.length > 0) {
-          this.el.emit("mxr-hand-data", { landmarks: landmarks[0] });
-        } else {
-          this.el.emit("mxr-hand-data", { landmarks: null });
-        }
+      if (type !== "RESULT") return;
 
-        this.isProcessing = false;
-      }
+      this.el.emit("mxr-hand-data", {
+        landmarks: landmarks?.length ? landmarks[0] : null,
+      });
+
+      this.isProcessing = false;
     };
 
     this.worker.postMessage({
@@ -399,245 +1061,252 @@ AFRAME.registerComponent("mxr-hand-tracking", {
     });
   },
 
-  startTracking: async function () {
+  async startTracking() {
     try {
-      // the camera stream is requested internally for background ml processing
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: 1280, height: 720 }
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       });
 
       this.videoElement = document.createElement("video");
+      this.videoElement.srcObject = this.stream;
       this.videoElement.autoplay = true;
       this.videoElement.playsInline = true;
       this.videoElement.muted = true;
-      this.videoElement.srcObject = stream;
 
-      this.videoElement.onloadedmetadata = () => {
-        this.videoElement.play();
-        this.el.sceneEl.enterVR();
+      this.videoElement.onloadedmetadata = async () => {
+        window.MXRCalibration.cameraAspect = this.videoElement.videoWidth / this.videoElement.videoHeight;
+
+        window.MXRCalibration.aspect = window.MXRCalibration.cameraAspect;
+
+        await this.videoElement.play();
+
+        this.el.sceneEl.enterVR?.();
+
+        setTimeout(() => {
+          const cam = this.el.getObject3D("camera");
+          if (cam) cam.updateProjectionMatrix();
+        }, 500);
       };
-    } catch (error) {
-      console.error("camera access failed for tracking:", error);
+    } catch (err) {
+      console.error("[mxr-hand-tracking] Camera init failed:", err);
     }
   },
 
-  updateHandPosition: function (landmarks) {
-    if (!landmarks || landmarks.length === 0) {
-      this.handCollider.setAttribute("visible", "false");
+  async tick(time) {
+    if (
+      !this.videoElement ||
+      this.isProcessing ||
+      this.videoElement.readyState < 2 // HAVE_CURRENT_DATA
+    ) {
       return;
     }
 
-    this.handCollider.setAttribute("visible", "true");
-
-    const hand = landmarks[0];
-    const cameraObj = this.el.getObject3D("camera");
-
-    if (!cameraObj) return;
-
-    let minX = 1, minY = 1, minZ = 1;
-    let maxX = 0, maxY = 0, maxZ = 0;
-
-    for (let i = 0; i < hand.length; i++) {
-      const lm = hand[i];
-      if (lm.x < minX) minX = lm.x;
-      if (lm.y < minY) minY = lm.y;
-      if (lm.z < minZ) minZ = lm.z;
-      if (lm.x > maxX) maxX = lm.x;
-      if (lm.y > maxY) maxY = lm.y;
-      if (lm.z > maxZ) maxZ = lm.z;
-    }
-
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    const cz = (minZ + maxZ) / 2;
-
-    const baseDepth = 0.5;
-    const vFov = (cameraObj.fov * Math.PI) / 180;
-    const frustumHeight = 2 * Math.tan(vFov / 2) * baseDepth;
-    const frustumWidth = frustumHeight * cameraObj.aspect;
-
-    const finalX = (cx - 0.5) * frustumWidth;
-    const finalY = -(cy - 0.5) * frustumHeight;
-    const finalZ = -baseDepth + cz * frustumWidth;
-
-    this.handCollider.setAttribute("position", `${finalX} ${finalY} ${finalZ}`);
-
-    const boxWidth = Math.max((maxX - minX) * frustumWidth, 0.05);
-    const boxHeight = Math.max((maxY - minY) * frustumHeight, 0.05);
-    const boxDepth = Math.max((maxZ - minZ) * frustumWidth, 0.05);
-
-    this.handCollider.setAttribute(
-      "scale",
-      `${boxWidth} ${boxHeight} ${boxDepth}`,
-    );
-  },
-
-  tick: async function (time) {
-    if (!this.videoElement || this.isProcessing) return;
     this.isProcessing = true;
 
     try {
       const bitmap = await createImageBitmap(this.videoElement);
+
       this.worker.postMessage(
-        { type: "PROCESS", image: bitmap, timestamp: time },
+        {
+          type: "PROCESS",
+          image: bitmap,
+          timestamp: time,
+        },
         [bitmap],
       );
-    } catch (e) {
+    } catch (err) {
+      // importante: libera o lock do pipeline mesmo em erro
+      console.warn("[mxr-hand-tracking] Frame skipped:", err);
       this.isProcessing = false;
     }
   },
+
+  remove() {
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop());
+    }
+
+    if (this.worker) {
+      this.worker.terminate();
+    }
+
+    this.videoElement = null;
+    this.stream = null;
+  },
 });
+
 ```
 
 ---
 
-### File: src/components/mxr-laser-grabber.js
+### File: src/components/mxr-hud.js
 
 ```javascript
-AFRAME.registerComponent('mxr-laser-grabber', {
+AFRAME.registerComponent("mxr-hud", {
   schema: {
-    targetClass: { type: 'string', default: '.grabbable' }
+    position: {
+      default: "0 -0.5 -1",
+    },
+
+    width: {
+      default: 2,
+    },
+
+    color: {
+      default: "#FFFFFF",
+    },
+
+    debugColor: {
+      default: "#00FFAA",
+    },
+
+    showDebug: {
+      default: true,
+    },
   },
 
-  init: function () {
-    this.grabbedEl = null;
-    this.hoveredEl = null;
-    this.isAiming = false;
-    this.handPos = new THREE.Vector3();
-    this.grabDistance = 0;
-    this.raycaster = new THREE.Raycaster();
+  init() {
+    this.text = document.createElement("a-text");
 
-    // o laser visual é criado com mesclagem de diferença
-    const material = new THREE.LineBasicMaterial({
-      color: 0xFFFFFF,
-      linewidth: 3,
-      blending: THREE.DifferenceBlending,
-      transparent: true
-    });
-    const geometry = new THREE.BufferGeometry();
-    this.laserLine = new THREE.Line(geometry, material);
-    this.laserLine.visible = false;
-    this.el.sceneEl.object3D.add(this.laserLine);
+    this.text.setAttribute(
+      "position",
 
-    this.onGunStart = this.onGunStart.bind(this);
-    this.onGunMove = this.onGunMove.bind(this);
-    this.onGunEnd = this.onGunEnd.bind(this);
-    this.onPointStart = this.onPointStart.bind(this);
-    this.onPointMove = this.onPointMove.bind(this);
-    this.onPointEnd = this.onPointEnd.bind(this);
-    this.onHandLost = this.onHandLost.bind(this);
+      this.data.position,
+    );
 
-    this.el.addEventListener('mxr-gun-start', this.onGunStart);
-    this.el.addEventListener('mxr-gun-move', this.onGunMove);
-    this.el.addEventListener('mxr-gun-end', this.onGunEnd);
-    this.el.addEventListener('mxr-point-start', this.onPointStart);
-    this.el.addEventListener('mxr-point-move', this.onPointMove);
-    this.el.addEventListener('mxr-point-end', this.onPointEnd);
-    this.el.addEventListener('mxr-hand-lost', this.onHandLost);
+    this.text.setAttribute(
+      "align",
+
+      "center",
+    );
+
+    this.text.setAttribute(
+      "width",
+
+      this.data.width,
+    );
+
+    this.text.setAttribute(
+      "value",
+
+      "Idle",
+    );
+
+    this.text.setAttribute(
+      "color",
+
+      this.data.color,
+    );
+
+    this.el.appendChild(this.text);
+
+    this.debug = document.createElement("a-text");
+
+    this.debug.setAttribute(
+      "position",
+
+      "0 -0.62 -1",
+    );
+
+    this.debug.setAttribute(
+      "align",
+
+      "center",
+    );
+
+    this.debug.setAttribute(
+      "width",
+
+      2.5,
+    );
+
+    this.debug.setAttribute(
+      "value",
+
+      "",
+    );
+
+    this.debug.setAttribute(
+      "color",
+
+      this.data.debugColor,
+    );
+
+    this.debug.setAttribute(
+      "visible",
+
+      this.data.showDebug,
+    );
+
+    this.el.appendChild(this.debug);
+
+    window.MXRHUD = this;
+
+    window.addEventListener(
+      "mxr-mode-change",
+
+      this.onModeChange.bind(this),
+    );
   },
 
-  remove: function () {
-    this.el.removeEventListener('mxr-gun-start', this.onGunStart);
-    this.el.removeEventListener('mxr-gun-move', this.onGunMove);
-    this.el.removeEventListener('mxr-gun-end', this.onGunEnd);
-    this.el.removeEventListener('mxr-point-start', this.onPointStart);
-    this.el.removeEventListener('mxr-point-move', this.onPointMove);
-    this.el.removeEventListener('mxr-point-end', this.onPointEnd);
-    this.el.removeEventListener('mxr-hand-lost', this.onHandLost);
-    this.el.sceneEl.object3D.remove(this.laserLine);
+  setText(value) {
+    this.text.setAttribute(
+      "value",
+
+      value,
+    );
   },
 
-  onGunStart: function (event) {
-    if (!event.detail.position || this.grabbedEl) return;
-    this.isAiming = true;
-    this.laserLine.visible = true;
-    this.handPos.copy(event.detail.position);
+  setDebug(value) {
+    this.debug.setAttribute(
+      "value",
+
+      value,
+    );
   },
 
-  onGunMove: function (event) {
-    if (this.isAiming && event.detail.position) {
-      this.handPos.copy(event.detail.position);
+  clearDebug() {
+    this.debug.setAttribute(
+      "value",
+
+      "",
+    );
+  },
+
+  onModeChange(e) {
+    const mode = e.detail.mode;
+
+    switch (mode) {
+      case "idle":
+        this.setText("Idle");
+
+        break;
+
+      case "grab":
+        this.setText("Grab");
+
+        break;
+
+      case "teleport":
+        this.setText("Teleport");
+
+        break;
+
+      case "point":
+        this.setText("Point");
+
+        break;
+
+      default:
+        this.setText(mode);
     }
   },
-
-  onGunEnd: function () {
-    this.isAiming = false;
-    // o laser só é escondido se um objeto não foi adquirido no mesmo quadro
-    if (!this.grabbedEl) this.laserLine.visible = false;
-  },
-
-  onPointStart: function (event) {
-    // a transição de arminha para apontar captura o objeto em foco
-    if (this.hoveredEl && !this.grabbedEl && event.detail.position) {
-      this.grabbedEl = this.hoveredEl;
-      this.handPos.copy(event.detail.position);
-      
-      const cameraObj = this.el.getObject3D('camera');
-      this.grabDistance = cameraObj.position.distanceTo(this.grabbedEl.object3D.position);
-      
-      this.laserLine.visible = true;
-      this.el.emit('mxr-grab-acquired', { el: this.grabbedEl });
-    }
-  },
-
-  onPointMove: function (event) {
-    if (this.grabbedEl && event.detail.position) {
-      this.handPos.copy(event.detail.position);
-    }
-  },
-
-  onPointEnd: function () {
-    if (this.grabbedEl) {
-      this.el.emit('mxr-grab-released', { el: this.grabbedEl });
-      this.grabbedEl = null;
-      this.laserLine.visible = false;
-    }
-  },
-
-  onHandLost: function () {
-    this.onGunEnd();
-    this.onPointEnd();
-  },
-
-  tick: function () {
-    const cameraObj = this.el.getObject3D('camera');
-    if (!cameraObj) return;
-
-    // a posição mundial absoluta do dedo é calculada
-    const worldHandPos = this.handPos.clone().applyMatrix4(cameraObj.matrixWorld);
-    
-    // a direção do raio vai da câmera diretamente através do dedo apontado
-    const rayDir = new THREE.Vector3().subVectors(worldHandPos, cameraObj.position).normalize();
-
-    if (this.isAiming && !this.grabbedEl) {
-      this.raycaster.set(cameraObj.position, rayDir);
-      
-      const interactables = Array.from(this.el.sceneEl.querySelectorAll(this.data.targetClass))
-        .map(el => el.object3D).filter(obj => obj !== undefined);
-      
-      const intersects = this.raycaster.intersectObjects(interactables, true);
-
-      if (intersects.length > 0) {
-        // a entidade raiz é recuperada caso uma malha filha tenha sido atingida
-        let hitObj = intersects[0].object;
-        while (hitObj.parent && !hitObj.el) { hitObj = hitObj.parent; }
-        
-        this.hoveredEl = hitObj.el;
-        this.laserLine.geometry.setFromPoints([worldHandPos, intersects[0].point]);
-      } else {
-        this.hoveredEl = null;
-        const distantPoint = worldHandPos.clone().add(rayDir.multiplyScalar(10));
-        this.laserLine.geometry.setFromPoints([worldHandPos, distantPoint]);
-      }
-    } else if (this.grabbedEl) {
-      // o objeto é arrastado seguindo a direção do raio restringido pela distância inicial
-      const targetPos = cameraObj.position.clone().add(rayDir.multiplyScalar(this.grabDistance));
-      this.grabbedEl.setAttribute('position', `${targetPos.x} ${targetPos.y} ${targetPos.z}`);
-      
-      this.laserLine.geometry.setFromPoints([worldHandPos, targetPos]);
-    }
-  }
 });
+
 ```
 
 ---
@@ -645,135 +1314,341 @@ AFRAME.registerComponent('mxr-laser-grabber', {
 ### File: src/components/mxr-teleport.js
 
 ```javascript
-AFRAME.registerComponent('mxr-teleport', {
+AFRAME.registerComponent("mxr-teleport", {
   schema: {
-    rig: { type: 'selector', default: '#camera-rig' },
-    power: { type: 'number', default: 6 },
-    floorY: { type: 'number', default: 0 }
+    rig: {
+      type: "selector",
+      default: "#camera-rig",
+    },
+
+    activationPose: {
+      type: "string",
+      default: "rock",
+    },
+
+    confirmPose: {
+      type: "string",
+      default: "pinch",
+    },
+
+    cancelPose: {
+      type: "string",
+      default: "rock",
+    },
+
+    power: {
+      type: "number",
+      default: 6,
+    },
+
+    floorY: {
+      type: "number",
+      default: 0,
+    },
+
+    showArc: {
+      type: "boolean",
+      default: true,
+    },
   },
 
-  init: function () {
+  init() {
     this.isAiming = false;
+
     this.isValidHit = false;
+
     this.hitPoint = new THREE.Vector3();
 
-    // a curva visual de mira é construída
+    this.createArc();
+
+    this.createReticle();
+
+    this.bindEvents();
+  },
+
+  createArc() {
     const material = new THREE.LineBasicMaterial({
-      color: 0xFFFFFF,
-      linewidth: 2,
+      color: 0xffffff,
+
+      transparent: true,
+
+      opacity: 0.9,
+
       blending: THREE.DifferenceBlending,
-      transparent: true
     });
-    
-    const geometry = new THREE.BufferGeometry();
-    this.arcLine = new THREE.Line(geometry, material);
+
+    this.arcLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+
+      material,
+    );
+
     this.arcLine.visible = false;
+
     this.el.sceneEl.object3D.add(this.arcLine);
+  },
 
-    // o retículo de chão é criado
-    this.reticle = document.createElement('a-ring');
-    this.reticle.setAttribute('material', 'color: #FFFFFF; shader: flat; blending: difference; transparent: true; depthTest: false');
-    this.reticle.setAttribute('radius-inner', '0.2');
-    this.reticle.setAttribute('radius-outer', '0.35');
-    this.reticle.setAttribute('rotation', '-90 0 0');
-    this.reticle.setAttribute('visible', 'false');
+  createReticle() {
+    this.reticle = document.createElement("a-ring");
+
+    this.reticle.setAttribute(
+      "radius-inner",
+
+      "0.18",
+    );
+
+    this.reticle.setAttribute(
+      "radius-outer",
+
+      "0.28",
+    );
+
+    this.reticle.setAttribute(
+      "rotation",
+
+      "-90 0 0",
+    );
+
+    this.reticle.setAttribute(
+      "material",
+
+      "shader:flat;color:#ffffff;transparent:true;opacity:0.85",
+    );
+
+    this.reticle.setAttribute(
+      "visible",
+
+      false,
+    );
+
     this.el.sceneEl.appendChild(this.reticle);
-
-    this.onRockStart = this.onRockStart.bind(this);
-    this.onPinchStart = this.onPinchStart.bind(this);
-
-    this.el.addEventListener('mxr-rock-start', this.onRockStart);
-    this.el.addEventListener('mxr-pinch-start', this.onPinchStart);
   },
 
-  remove: function () {
-    this.el.removeEventListener('mxr-rock-start', this.onRockStart);
-    this.el.removeEventListener('mxr-pinch-start', this.onPinchStart);
+  bindEvents() {
+    this.onActivate = this.onActivate.bind(this);
+
+    this.onConfirm = this.onConfirm.bind(this);
+
+    this.onHandLost = this.onHandLost.bind(this);
+
+    this.el.addEventListener(
+      `mxr-${this.data.activationPose}-start`,
+
+      this.onActivate,
+    );
+
+    this.el.addEventListener(
+      `mxr-${this.data.confirmPose}-start`,
+
+      this.onConfirm,
+    );
+
+    this.el.addEventListener(
+      "mxr-hand-lost",
+
+      this.onHandLost,
+    );
+  },
+
+  remove() {
+    this.el.removeEventListener(
+      `mxr-${this.data.activationPose}-start`,
+
+      this.onActivate,
+    );
+
+    this.el.removeEventListener(
+      `mxr-${this.data.confirmPose}-start`,
+
+      this.onConfirm,
+    );
+
+    this.el.removeEventListener(
+      "mxr-hand-lost",
+
+      this.onHandLost,
+    );
+
     this.el.sceneEl.object3D.remove(this.arcLine);
+
+    if (this.reticle.parentNode) {
+      this.reticle.parentNode.removeChild(this.reticle);
+    }
   },
 
-  onRockStart: function () {
-    // o estado da mira é alternado
+  onActivate() {
     if (this.isAiming) {
-      this.cancelAim();
-    } else {
-      this.isAiming = true;
-      this.arcLine.visible = true;
-      this.el.emit('mxr-teleport-aiming');
+      this.cancel();
+
+      return;
     }
+
+    if (
+      !MXRInteractionManager.request(
+        "teleport",
+
+        this,
+      )
+    ) {
+      return;
+    }
+
+    this.isAiming = true;
+
+    this.arcLine.visible = this.data.showArc;
+
+    window.MXRHUD?.setText("Teleport");
   },
 
-  onPinchStart: function () {
-    // o rig é movido para a posição do retículo se for válido
-    if (this.isAiming && this.isValidHit && this.data.rig) {
-      const currentPos = this.data.rig.getAttribute('position');
-      this.data.rig.setAttribute('position', {
+  onConfirm() {
+    if (!this.isAiming) {
+      return;
+    }
+
+    if (!this.isValidHit) {
+      return;
+    }
+
+    if (!this.data.rig) {
+      return;
+    }
+
+    const current = this.data.rig.getAttribute("position");
+
+    this.data.rig.setAttribute(
+      "position",
+
+      {
         x: this.hitPoint.x,
-        y: currentPos.y,
-        z: this.hitPoint.z
-      });
-      this.cancelAim();
-    }
+
+        y: current.y,
+
+        z: this.hitPoint.z,
+      },
+    );
+
+    this.cancel();
   },
 
-  cancelAim: function () {
-    // os visuais e a lógica de mira são desligados
+  onHandLost() {},
+
+  cancel() {
     this.isAiming = false;
+
+    this.isValidHit = false;
+
     this.arcLine.visible = false;
-    this.reticle.setAttribute('visible', 'false');
-    this.el.emit('mxr-teleport-canceled');
+
+    this.reticle.setAttribute(
+      "visible",
+
+      false,
+    );
+
+    MXRInteractionManager.release(this);
+
+    window.MXRHUD?.setText("Idle");
   },
 
-  tick: function () {
-    if (!this.isAiming) return;
+  tick() {
+    if (!this.isAiming) {
+      return;
+    }
 
-    const cameraObj = this.el.getObject3D('camera');
-    if (!cameraObj) return;
+    const camera = this.el.getObject3D("camera");
+
+    if (!camera) {
+      return;
+    }
 
     const startPos = new THREE.Vector3();
-    cameraObj.getWorldPosition(startPos);
+
+    camera.getWorldPosition(startPos);
+
     startPos.y -= 0.2;
 
-    const direction = new THREE.Vector3(0, 0, -1);
-    direction.applyQuaternion(cameraObj.getWorldQuaternion(new THREE.Quaternion()));
+    const direction = new THREE.Vector3(
+      0,
 
-    // um leve ângulo para cima é adicionado para melhorar o arco
+      0,
+
+      -1,
+    );
+
+    direction.applyQuaternion(
+      camera.getWorldQuaternion(new THREE.Quaternion()),
+    );
+
     direction.y += 0.2;
+
     direction.normalize();
 
     const velocity = direction.multiplyScalar(this.data.power);
-    const gravity = new THREE.Vector3(0, -9.8, 0);
+
+    const gravity = new THREE.Vector3(
+      0,
+
+      -9.8,
+
+      0,
+    );
+
     const dt = 0.05;
+
     let currentPos = startPos.clone();
 
     const points = [];
+
     this.isValidHit = false;
 
-    // o cálculo cinemático de física é executado
     for (let i = 0; i < 40; i++) {
       points.push(currentPos.clone());
 
       if (currentPos.y <= this.data.floorY) {
         this.hitPoint.copy(currentPos);
+
         this.hitPoint.y = this.data.floorY;
+
         this.isValidHit = true;
+
         break;
       }
 
-      currentPos.add(velocity.clone().multiplyScalar(dt));
-      velocity.add(gravity.clone().multiplyScalar(dt));
+      currentPos.add(
+        velocity
+          .clone()
+
+          .multiplyScalar(dt),
+      );
+
+      velocity.add(
+        gravity
+          .clone()
+
+          .multiplyScalar(dt),
+      );
     }
 
-    this.arcLine.geometry.setFromPoints(points);
+    if (this.data.showArc) {
+      this.arcLine.geometry.setFromPoints(points);
+    }
+
+    this.reticle.setAttribute(
+      "visible",
+
+      this.isValidHit,
+    );
 
     if (this.isValidHit) {
-      this.reticle.setAttribute('position', `${this.hitPoint.x} ${this.hitPoint.y + 0.01} ${this.hitPoint.z}`);
-      this.reticle.setAttribute('visible', 'true');
-    } else {
-      this.reticle.setAttribute('visible', 'false');
+      this.reticle.setAttribute(
+        "position",
+
+        `${this.hitPoint.x} ${this.hitPoint.y + 0.01} ${this.hitPoint.z}`,
+      );
     }
-  }
+  },
 });
+
 ```
 
 ---
@@ -781,83 +1656,214 @@ AFRAME.registerComponent('mxr-teleport', {
 ### File: src/components/xr-passthrough.js
 
 ```javascript
-import { passthroughShader } from '../shaders/passthrough-shader.js';
+import { passthroughShader } from "../shaders/passthrough-shader.js";
 
-// é registrado o componente a-frame de passthrough
-AFRAME.registerComponent('xr-passthrough', {
+AFRAME.registerComponent("xr-passthrough", {
   schema: {
-    k1: { type: 'number', default: 0.0 },
-    zoom: { type: 'number', default: 1.0 }
+    k1: { type: "number", default: 0.0 },
+    zoom: { type: "number", default: 1.0 },
   },
 
-  init: function () {
-    // é armazenada a referência do material e do vídeo para uso interno
+  init() {
     this.customMaterial = null;
     this.videoElement = null;
+    this.videoPlane = null;
+    this.stream = null;
   },
 
-  startCamera: async function () {
+  async startCamera() {
     try {
-      // é solicitado o acesso à câmera traseira
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: 1280, height: 720 }
-      });
-      
-      // é criado o elemento de vídeo internamente
-      this.videoElement = document.createElement('video');
-      this.videoElement.autoplay = true;
-      this.videoElement.playsInline = true;
-      this.videoElement.muted = true;
-      this.videoElement.srcObject = stream;
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "environment",
 
-      // é aguardado o vídeo estar pronto para reprodução
-      this.videoElement.onloadedmetadata = () => {
-        this.videoElement.play();
-        // é executada a configuração do plano 3d
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+
+      this.videoElement = document.createElement("video");
+
+      this.videoElement.srcObject = this.stream;
+
+      this.videoElement.autoplay = true;
+
+      this.videoElement.playsInline = true;
+
+      this.videoElement.muted = true;
+
+      this.videoElement.onloadedmetadata = async () => {
+        await this.videoElement.play();
+
         this.setupVideoPlane();
-        // é forçado o modo vr nativo do a-frame
+
         this.el.sceneEl.enterVR();
       };
     } catch (error) {
-      console.error('error accessing camera:', error);
-      alert('camera permission is required for xr mode.');
+      console.error(error);
+
+      alert("camera permission is required for xr mode.");
     }
   },
 
   setupVideoPlane: function () {
-    // é criada a textura a partir do vídeo interno
     const videoTexture = new THREE.VideoTexture(this.videoElement);
+
     videoTexture.minFilter = THREE.LinearFilter;
+
     videoTexture.magFilter = THREE.LinearFilter;
+
     videoTexture.format = THREE.RGBAFormat;
 
-    // é instanciado o shader material
     this.customMaterial = new THREE.ShaderMaterial({
       uniforms: THREE.UniformsUtils.clone(passthroughShader.uniforms),
+
       vertexShader: passthroughShader.vertexShader,
+
       fragmentShader: passthroughShader.fragmentShader,
+
       depthWrite: false,
-      side: THREE.DoubleSide
+
+      side: THREE.DoubleSide,
     });
-    
+
     this.customMaterial.uniforms.videoTexture.value = videoTexture;
 
-    // é criado o plano de fundo e adicionado à câmera
-    const planeGeometry = new THREE.PlaneGeometry(32, 18);
-    const videoPlane = new THREE.Mesh(planeGeometry, this.customMaterial);
-    
-    videoPlane.position.set(0, 0, -10);
+    const aspect = this.videoElement.videoWidth / this.videoElement.videoHeight;
+
+    const planeHeight = 18;
+
+    const planeWidth = planeHeight * aspect;
+
+    const planeGeometry = new THREE.PlaneGeometry(
+      planeWidth,
+
+      planeHeight,
+    );
+
+    const videoPlane = new THREE.Mesh(
+      planeGeometry,
+
+      this.customMaterial,
+    );
+
+    videoPlane.position.set(
+      0,
+
+      0,
+
+      -10,
+    );
+
     this.el.object3D.add(videoPlane);
   },
 
-  update: function () {
-    // são atualizados os uniformes via sliders
-    if (this.customMaterial) {
-      this.customMaterial.uniforms.k1.value = this.data.k1;
-      this.customMaterial.uniforms.zoomLevel.value = this.data.zoom;
+  update() {
+    if (!this.customMaterial) return;
+
+    this.customMaterial.uniforms.k1.value = this.data.k1;
+
+    this.customMaterial.uniforms.zoomLevel.value = this.data.zoom;
+  },
+
+  remove() {
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop());
     }
-  }
+
+    if (this.videoPlane) {
+      this.el.object3D.remove(this.videoPlane);
+    }
+  },
 });
+
+```
+
+---
+
+### File: src/core/mxr-interaction-manager.js
+
+```javascript
+window.MXRInteractionManager = {
+  mode: "idle",
+
+  owner: null,
+
+  listeners: [],
+
+  request(mode, owner = null) {
+    if (this.mode !== "idle") {
+      return false;
+    }
+
+    this.mode = mode;
+
+    this.owner = owner;
+
+    this.notify();
+
+    return true;
+  },
+
+  force(mode, owner = null) {
+    this.mode = mode;
+
+    this.owner = owner;
+
+    this.notify();
+
+    return true;
+  },
+
+  release(owner = null) {
+    if (owner) {
+      if (this.owner !== owner) {
+        return;
+      }
+    }
+
+    this.mode = "idle";
+
+    this.owner = null;
+
+    this.notify();
+  },
+
+  isIdle() {
+    return this.mode === "idle";
+  },
+
+  isActive(mode) {
+    return this.mode === mode;
+  },
+
+  getMode() {
+    return this.mode;
+  },
+
+  subscribe(callback) {
+    this.listeners.push(callback);
+  },
+
+  unsubscribe(callback) {
+    const index = this.listeners.indexOf(callback);
+
+    if (index !== -1) {
+      this.listeners.splice(index, 1);
+    }
+  },
+
+  notify() {
+    for (const callback of this.listeners) {
+      callback({
+        mode: this.mode,
+
+        owner: this.owner,
+      });
+    }
+  },
+};
+
 ```
 
 ---
@@ -865,15 +1871,22 @@ AFRAME.registerComponent('xr-passthrough', {
 ### File: src/index.js
 
 ```javascript
-// é importado o conjunto de ferramentas da biblioteca
-import './components/xr-passthrough.js';
-import './components/mxr-hand-tracking.js'; // <- nova linha
-import './components/mxr-gesture-detector.js'; // <- nova linha
-import './components/mxr-teleport.js';
-import './components/mxr-grabber.js';  
-import './components/mxr-laser-grabber.js'; // <- nova linha
-// é registrado no console o carregamento da biblioteca em ambiente de desenvolvimento
-console.log('mxr-hand-controller library loaded successfully!');
+import "./core/mxr-interaction-manager.js";
+
+import "./components/mxr-hud.js";
+
+import "./components/mxr-hand-tracking.js";
+
+import "./components/mxr-gesture-detector.js";
+
+import "./components/mxr-hand-model.js";
+
+import "./components/mxr-gaze-grabber.js";
+
+import "./components/mxr-teleport.js";
+
+console.log("InteracXR loaded");
+
 ```
 
 ---
@@ -997,132 +2010,175 @@ self.onmessage = async (event) => {
 ```html
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
+
   <meta charset="UTF-8">
-  <title>VR Locomotion & Drag System</title>
-  <link rel="stylesheet" href="style.css">
-  
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>InteracXR V2 Demo</title>
+
+  <link rel="stylesheet" href="./style.css" />
+
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+
   <script type="module" src="../../src/index.js"></script>
+
 </head>
+
 <body>
+
   <div id="start-screen">
-    <h1>WebXR Hand Engine</h1>
-    <p>Please allow camera access to continue.</p>
-    <button id="start-btn">Start VR Mode</button>
+
+    <h1>InteracXR</h1>
+
+    <p>allow camera access</p>
+
+    <button id="start-btn">
+
+      start experience
+
+    </button>
+
   </div>
 
-  <a-scene xr-mode-ui="enabled: false"> 
-    
-    <a-sky color="#87CEEB"></a-sky>
-    
-    <a-plane 
-      position="0 0 0" 
-      rotation="-90 0 0" 
-      width="50" 
-      height="50" 
-      color="#808080"
-      material="roughness: 1; metalness: 0">
-    </a-plane>
-    <a-grid position="0 0.01 0"></a-grid>
+  <a-scene xr-mode-ui="enabled:false" background="color:#111" renderer="colorManagement:true">
 
-    <a-box 
-      id="target-cube"
-      class="grabbable"
-      position="0 1.5 -1.5" 
-      rotation="0 45 0" 
-      color="#4CC3D9"
-      animation="property: rotation; to: 0 405 0; loop: true; dur: 3000">
+    <a-sky color="#87CEEB"></a-sky>
+
+    <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#808080"
+      material="roughness:1;metalness:0">
+
+    </a-plane>
+
+    <a-grid position="0 0.01 0">
+
+    </a-grid>
+
+    <a-box id="cube" class="grabbable" position="0 1.5 -1.5" rotation="0 45 0" color="#4CC3D9" animation="
+property:rotation;
+to:0 405 0;
+loop:true;
+dur:3000">
+
     </a-box>
 
+    <a-sphere id="sphere" class="grabbable" radius="0.20" position="0.7 1.5 -2" color="#ff3366">
+
+    </a-sphere>
+
+    <a-cylinder id="cylinder" class="grabbable" position="-0.7 1.5 -2" radius="0.15" height="0.40" color="#00ff88">
+
+    </a-cylinder>
+
     <a-entity id="camera-rig" position="0 1.6 0">
-      <a-camera 
-        id="main-camera" 
-        position="0 0 0"
-        mxr-hand-tracking="maxHands: 1" 
-        mxr-gesture-detector="source: #main-camera"
-        mxr-teleport="rig: #camera-rig; floorY: 0"
-        mxr-grabber="targetClass: .grabbable; grabRadius: 0.35">
-        
-        <a-text 
-          id="hud-text" 
-          value="Status: None" 
-          position="0 -0.5 -1" 
-          color="#FFF" 
-          align="center" 
-          width="2">
-        </a-text>
+
+      <a-camera id="main-camera" position="0 0 0" mxr-hand-tracking="
+
+maxHands:1
+
+" mxr-gesture-detector="
+
+source:#main-camera
+
+" mxr-hand-model="
+
+source:#main-camera
+
+" mxr-gaze-grabber="
+
+targetClass:.grabbable;
+
+activationPose:victory;
+
+grabPose:grab;
+
+hoverOpacity:0.45;
+
+grabOpacity:0.35;
+
+grabSmoothing:0.2;
+
+maxDistance:10;
+
+showCursor:true
+
+" mxr-teleport="
+
+rig:#camera-rig;
+
+activationPose:rock;
+
+confirmPose:pinch;
+
+cancelPose:grab;
+
+power:6;
+
+floorY:0;
+
+showArc:true
+
+">
+
       </a-camera>
+
     </a-entity>
-    
+
   </a-scene>
 
   <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const startBtn = document.getElementById('start-btn');
-      const startScreen = document.getElementById('start-screen');
-      const cameraEl = document.getElementById('main-camera');
-      const hudText = document.getElementById('hud-text');
-      const targetCube = document.getElementById('target-cube');
 
-      let isAiming = false;
+    document
+      .getElementById(
 
-      startBtn.addEventListener('click', () => {
-        cameraEl.components['mxr-hand-tracking'].startTracking();
-        startScreen.style.display = 'none';
-      });
+        "start-btn"
 
-      cameraEl.addEventListener('mxr-teleport-aiming', () => {
-        isAiming = true;
-        hudText.setAttribute('value', 'AIMING (Pinch to Move, Rock to Cancel)');
-      });
+      )
 
-      cameraEl.addEventListener('mxr-teleport-canceled', () => {
-        isAiming = false;
-        hudText.setAttribute('value', 'Status: None');
-      });
+      .addEventListener(
 
-      cameraEl.addEventListener('mxr-grab-start', () => {
-        if (!isAiming) hudText.setAttribute('value', 'Status: GRAB');
-      });
+        "click",
 
-      cameraEl.addEventListener('mxr-grab-end', () => {
-        if (!isAiming) hudText.setAttribute('value', 'Status: None');
-      });
+        () => {
 
-      cameraEl.addEventListener('mxr-point-start', () => {
-        if (!isAiming) hudText.setAttribute('value', 'Status: POINT');
-      });
+          const camera =
 
-      cameraEl.addEventListener('mxr-point-end', () => {
-        if (!isAiming) hudText.setAttribute('value', 'Status: None');
-      });
+            document.getElementById(
 
-      cameraEl.addEventListener('mxr-pinch-start', () => {
-        if (!isAiming) hudText.setAttribute('value', 'Status: PINCH');
-      });
+              "main-camera"
 
-      cameraEl.addEventListener('mxr-pinch-end', () => {
-        if (!isAiming) hudText.setAttribute('value', 'Status: None');
-      });
+            );
 
-      cameraEl.addEventListener('mxr-hand-lost', () => {
-        if (!isAiming) hudText.setAttribute('value', 'Status: None');
-      });
+          camera
 
-      // grabber specific visual feedback
-      cameraEl.addEventListener('mxr-grab-acquired', (e) => {
-        e.detail.el.setAttribute('color', '#00FF00');
-        hudText.setAttribute('value', 'Status: HOLDING OBJECT');
-      });
+            .components
 
-      cameraEl.addEventListener('mxr-grab-released', (e) => {
-        e.detail.el.setAttribute('color', '#4CC3D9');
-        if (!isAiming) hudText.setAttribute('value', 'Status: None');
-      });
-    });
+          ["mxr-hand-tracking"]
+
+            .startTracking();
+
+          document
+
+            .getElementById(
+
+              "start-screen"
+
+            )
+
+            .style.display =
+
+            "none";
+
+        }
+
+      );
+
   </script>
+
 </body>
+
 </html>
 ```
 
