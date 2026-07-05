@@ -1,4 +1,4 @@
-AFRAME.registerComponent("mxr-interactor", {
+AFRAME.registerComponent("ixr-interactor", {
   schema: {
     targetClass: { type: "string", default: ".interactable" },
     interactPose: { type: "string", default: "pinch" }
@@ -6,17 +6,17 @@ AFRAME.registerComponent("mxr-interactor", {
 
   init() {
     this.onInteract = this.onInteract.bind(this);
-    this.el.addEventListener(`mxr-${this.data.interactPose}-start`, this.onInteract);
+    this.el.addEventListener(`ixr-${this.data.interactPose}-start`, this.onInteract);
   },
 
   remove() {
-    this.el.removeEventListener(`mxr-${this.data.interactPose}-start`, this.onInteract);
+    this.el.removeEventListener(`ixr-${this.data.interactPose}-start`, this.onInteract);
   },
 
   onInteract() {
-    if (!MXRInteractionManager.request("interact", this)) return;
+    if (!ixrInteractionManager.request("interact", this)) return;
 
-    const cursorComponent = this.el.components["mxr-cursor"];
+    const cursorComponent = this.el.components["ixr-cursor"];
     if (cursorComponent) {
       const hovered = cursorComponent.getHoveredElement();
       
@@ -36,13 +36,13 @@ AFRAME.registerComponent("mxr-interactor", {
         setTimeout(() => {
           hovered.setAttribute("scale", currentScale);
           // a bolinha regressa ao anel assim que o pulso termina
-          if (this.el.components["mxr-cursor"]) {
-            this.el.components["mxr-cursor"].setCursorActive(false);
+          if (this.el.components["ixr-cursor"]) {
+            this.el.components["ixr-cursor"].setCursorActive(false);
           }
         }, 150);
       }
     }
 
-    MXRInteractionManager.release(this);
+    ixrInteractionManager.release(this);
   }
 });

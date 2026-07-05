@@ -2,8 +2,8 @@ import { passthroughShader } from "../shaders/passthrough-shader.js";
 
 AFRAME.registerComponent("xr-passthrough", {
   schema: {
-    k1: { type: "number", default: 0.0 },
-    zoom: { type: "number", default: 1.0 },
+    k1: { type: "number", default: 0.05 },
+    zoom: { type: "number", default: 1.1 },
   },
 
   init() {
@@ -94,7 +94,7 @@ AFRAME.registerComponent("xr-passthrough", {
 
       0,
 
-      -10,
+      -50,
     );
 
     this.el.object3D.add(videoPlane);

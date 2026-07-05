@@ -1,4 +1,4 @@
-window.MXRInteractionManager = {
+window.ixrInteractionManager = {
   mode: "idle",
 
   owner: null,

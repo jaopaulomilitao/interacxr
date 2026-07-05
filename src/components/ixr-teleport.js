@@ -1,4 +1,4 @@
-AFRAME.registerComponent("mxr-teleport", {
+AFRAME.registerComponent("ixr-teleport", {
   schema: {
     rig: {
       type: "selector",
@@ -79,15 +79,15 @@ AFRAME.registerComponent("mxr-teleport", {
     this.onConfirm = this.onConfirm.bind(this);
     this.onHandLost = this.onHandLost.bind(this);
 
-    this.el.addEventListener(`mxr-${this.data.activationPose}-start`, this.onActivate);
-    this.el.addEventListener(`mxr-${this.data.confirmPose}-start`, this.onConfirm);
-    this.el.addEventListener("mxr-hand-lost", this.onHandLost);
+    this.el.addEventListener(`ixr-${this.data.activationPose}-start`, this.onActivate);
+    this.el.addEventListener(`ixr-${this.data.confirmPose}-start`, this.onConfirm);
+    this.el.addEventListener("ixr-hand-lost", this.onHandLost);
   },
 
   remove() {
-    this.el.removeEventListener(`mxr-${this.data.activationPose}-start`, this.onActivate);
-    this.el.removeEventListener(`mxr-${this.data.confirmPose}-start`, this.onConfirm);
-    this.el.removeEventListener("mxr-hand-lost", this.onHandLost);
+    this.el.removeEventListener(`ixr-${this.data.activationPose}-start`, this.onActivate);
+    this.el.removeEventListener(`ixr-${this.data.confirmPose}-start`, this.onConfirm);
+    this.el.removeEventListener("ixr-hand-lost", this.onHandLost);
 
     this.el.sceneEl.object3D.remove(this.arcLine);
 
@@ -102,7 +102,7 @@ AFRAME.registerComponent("mxr-teleport", {
       return;
     }
 
-    if (!MXRInteractionManager.request("teleport", this)) {
+    if (!ixrInteractionManager.request("teleport", this)) {
       return;
     }
 
@@ -116,12 +116,12 @@ AFRAME.registerComponent("mxr-teleport", {
     }
 
     // NOVO: feedback visual preenchendo o cursor instantaneamente
-    const cursor = this.el.components["mxr-cursor"];
+    const cursor = this.el.components["ixr-cursor"];
     if (cursor && typeof cursor.setCursorActive === 'function') {
       cursor.setCursorActive(true);
       setTimeout(() => {
-        if (this.el.components["mxr-cursor"]) {
-          this.el.components["mxr-cursor"].setCursorActive(false);
+        if (this.el.components["ixr-cursor"]) {
+          this.el.components["ixr-cursor"].setCursorActive(false);
         }
       }, 150);
     }
@@ -143,7 +143,7 @@ AFRAME.registerComponent("mxr-teleport", {
     this.isValidHit = false;
     this.arcLine.visible = false;
     this.reticle.setAttribute("visible", false);
-    MXRInteractionManager.release(this);
+    ixrInteractionManager.release(this);
   },
 
   tick() {

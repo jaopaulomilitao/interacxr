@@ -1,4 +1,4 @@
-AFRAME.registerComponent("mxr-gaze-grabber", {
+AFRAME.registerComponent("ixr-gaze-grabber", {
   schema: {
     targetClass: { type: "string", default: ".grabbable" },
     activationPose: { type: "string", default: "victory" },
@@ -51,25 +51,25 @@ AFRAME.registerComponent("mxr-gaze-grabber", {
     this.onGrabEnd = this.onGrabEnd.bind(this);
     this.onHandLost = this.onHandLost.bind(this);
 
-    this.el.addEventListener(`mxr-${this.data.activationPose}-start`, this.onAimStart);
-    this.el.addEventListener(`mxr-${this.data.activationPose}-end`, this.onAimEnd);
-    this.el.addEventListener(`mxr-${this.data.grabPose}-start`, this.onGrabStart);
-    this.el.addEventListener(`mxr-${this.data.grabPose}-move`, this.onGrabMove);
-    this.el.addEventListener(`mxr-${this.data.grabPose}-end`, this.onGrabEnd);
-    this.el.addEventListener("mxr-hand-lost", this.onHandLost);
+    this.el.addEventListener(`ixr-${this.data.activationPose}-start`, this.onAimStart);
+    this.el.addEventListener(`ixr-${this.data.activationPose}-end`, this.onAimEnd);
+    this.el.addEventListener(`ixr-${this.data.grabPose}-start`, this.onGrabStart);
+    this.el.addEventListener(`ixr-${this.data.grabPose}-move`, this.onGrabMove);
+    this.el.addEventListener(`ixr-${this.data.grabPose}-end`, this.onGrabEnd);
+    this.el.addEventListener("ixr-hand-lost", this.onHandLost);
   },
 
   remove() {
-    this.el.removeEventListener(`mxr-${this.data.activationPose}-start`, this.onAimStart);
-    this.el.removeEventListener(`mxr-${this.data.activationPose}-end`, this.onAimEnd);
-    this.el.removeEventListener(`mxr-${this.data.grabPose}-start`, this.onGrabStart);
-    this.el.removeEventListener(`mxr-${this.data.grabPose}-move`, this.onGrabMove);
-    this.el.removeEventListener(`mxr-${this.data.grabPose}-end`, this.onGrabEnd);
-    this.el.removeEventListener("mxr-hand-lost", this.onHandLost);
+    this.el.removeEventListener(`ixr-${this.data.activationPose}-start`, this.onAimStart);
+    this.el.removeEventListener(`ixr-${this.data.activationPose}-end`, this.onAimEnd);
+    this.el.removeEventListener(`ixr-${this.data.grabPose}-start`, this.onGrabStart);
+    this.el.removeEventListener(`ixr-${this.data.grabPose}-move`, this.onGrabMove);
+    this.el.removeEventListener(`ixr-${this.data.grabPose}-end`, this.onGrabEnd);
+    this.el.removeEventListener("ixr-hand-lost", this.onHandLost);
   },
 
   onAimStart() {
-    if (!MXRInteractionManager.request("grab", this)) return;
+    if (!ixrInteractionManager.request("grab", this)) return;
     this.isAiming = true;
     this.setHUD("Aiming");
   },
@@ -77,14 +77,14 @@ AFRAME.registerComponent("mxr-gaze-grabber", {
   onAimEnd() {
     if (this.grabbedElement) return;
     this.isAiming = false;
-    MXRInteractionManager.release(this);
+    ixrInteractionManager.release(this);
     this.setHUD("Idle");
   },
 
   onGrabStart(event) {
     if (!this.isAiming) return;
 
-    const cursor = this.el.components["mxr-cursor"];
+    const cursor = this.el.components["ixr-cursor"];
     if (!cursor) return;
 
     const hovered = cursor.getHoveredElement();
@@ -126,13 +126,13 @@ AFRAME.registerComponent("mxr-gaze-grabber", {
     if (!this.grabbedElement) return;
     
     // o preenchimento da bolinha é removido
-    const cursor = this.el.components["mxr-cursor"];
+    const cursor = this.el.components["ixr-cursor"];
     if (cursor) cursor.setCursorActive(false);
 
     this.restoreMaterial(this.grabbedElement);
     this.grabbedElement = null;
     this.isAiming = false;
-    MXRInteractionManager.release(this);
+    ixrInteractionManager.release(this);
     this.setHUD("Idle");
   },
 

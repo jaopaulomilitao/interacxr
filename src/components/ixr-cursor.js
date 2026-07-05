@@ -1,11 +1,13 @@
-AFRAME.registerComponent("mxr-cursor", {
+AFRAME.registerComponent("ixr-cursor", {
   schema: {
     targetClass: { type: "string", default: ".grabbable, .interactable" },
     maxDistance: { type: "number", default: 10 },
     cursorSize: { type: "number", default: 0.01 },
     cursorColor: { type: "color", default: "#FFFFFF" },
     idleOpacity: { type: "number", default: 0.3 },
-    hoverOpacity: { type: "number", default: 1.0 }
+    hoverOpacity: { type: "number", default: 1.0 },
+    // é definida a propriedade para alternar o efeito negativo
+    useNegativeEffect: { type: "boolean", default: false }
   },
 
   init() {
@@ -15,14 +17,14 @@ AFRAME.registerComponent("mxr-cursor", {
     
     this.hoveredElement = null;
     this.intersectionData = null;
-    this.isActive = false; // é controlada a flag de preenchimento
+    this.isActive = false;
 
-    // são pré-criadas as duas geometrias (anel para repouso, círculo para ativo)
     this.ringGeometry = new THREE.RingGeometry(
       this.data.cursorSize,
       this.data.cursorSize * 1.5,
       32
     );
+    
     this.solidGeometry = new THREE.CircleGeometry(
       this.data.cursorSize * 1.5,
       32
@@ -32,31 +34,43 @@ AFRAME.registerComponent("mxr-cursor", {
   },
 
   createCursor() {
-    const material = new THREE.MeshBasicMaterial({
+    // é construída a configuração base do material
+    const materialConfig = {
       color: this.data.cursorColor,
       transparent: true,
       opacity: this.data.idleOpacity,
       depthTest: false,
-      side: THREE.DoubleSide,
-      blending: THREE.DifferenceBlending // é aplicado o efeito negativo
-    });
+      side: THREE.DoubleSide
+    };
 
+    // é aplicado o efeito negativo caso a propriedade esteja habilitada
+    if (this.data.useNegativeEffect) {
+      materialConfig.blending = THREE.CustomBlending;
+      materialConfig.blendEquation = THREE.AddEquation;
+      materialConfig.blendSrc = THREE.OneMinusDstColorFactor;
+      materialConfig.blendDst = THREE.OneMinusSrcColorFactor;
+    }
+
+    const material = new THREE.MeshBasicMaterial(materialConfig);
     const mesh = new THREE.Mesh(this.ringGeometry, material);
+    
     mesh.position.set(0, 0, -1);
     this.el.object3D.add(mesh);
 
     return mesh;
   },
 
-  // é alternado o estado visual da malha
   setCursorActive(active) {
     this.isActive = active;
+    
     if (this.isActive) {
       this.cursorMesh.geometry = this.solidGeometry;
-      this.cursorMesh.material.opacity = this.data.hoverOpacity; // brilho máximo
+      this.cursorMesh.material.opacity = this.data.hoverOpacity;
     } else {
       this.cursorMesh.geometry = this.ringGeometry;
-      this.cursorMesh.material.opacity = this.hoveredElement ? this.data.hoverOpacity : this.data.idleOpacity;
+      this.cursorMesh.material.opacity = this.hoveredElement 
+        ? this.data.hoverOpacity 
+        : this.data.idleOpacity;
     }
   },
 
@@ -86,18 +100,18 @@ AFRAME.registerComponent("mxr-cursor", {
     if (intersections.length > 0 && intersections[0].distance <= this.data.maxDistance) {
       let hit = intersections[0].object;
       
+      // é realizada a busca pelo elemento pai que possui o componente a-frame
       while (hit.parent && !hit.el) {
         hit = hit.parent;
       }
 
       if (this.hoveredElement !== hit.el) {
         if (this.hoveredElement) {
-          this.el.emit("mxr-cursor-hover-end", { el: this.hoveredElement });
+          this.el.emit("ixr-cursor-hover-end", { el: this.hoveredElement });
         }
         this.hoveredElement = hit.el;
-        this.el.emit("mxr-cursor-hover-start", { el: this.hoveredElement });
+        this.el.emit("ixr-cursor-hover-start", { el: this.hoveredElement });
         
-        // a opacidade só é alterada pelo raycast se a ferramenta não estiver a agarrar algo
         if (!this.isActive) {
           this.cursorMesh.material.opacity = this.data.hoverOpacity;
         }
@@ -105,7 +119,7 @@ AFRAME.registerComponent("mxr-cursor", {
       this.intersectionData = intersections[0];
     } else {
       if (this.hoveredElement) {
-        this.el.emit("mxr-cursor-hover-end", { el: this.hoveredElement });
+        this.el.emit("ixr-cursor-hover-end", { el: this.hoveredElement });
         this.hoveredElement = null;
         this.intersectionData = null;
         

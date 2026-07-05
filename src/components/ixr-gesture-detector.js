@@ -1,4 +1,4 @@
-AFRAME.registerComponent("mxr-gesture-detector", {
+AFRAME.registerComponent("ixr-gesture-detector", {
   schema: {
     source: {
       type: "selector",
@@ -9,17 +9,17 @@ AFRAME.registerComponent("mxr-gesture-detector", {
   init() {
     this.states = { grab: false, victory: false, rock: false, point: false, pinch: false };
     this.onHandData = this.onHandData.bind(this);
-    this.data.source.addEventListener("mxr-hand-data", this.onHandData);
+    this.data.source.addEventListener("ixr-hand-data", this.onHandData);
   },
 
   remove() {
-    this.data.source.removeEventListener("mxr-hand-data", this.onHandData);
+    this.data.source.removeEventListener("ixr-hand-data", this.onHandData);
   },
 
   emitPose(name, state, payload = {}) {
-    const start = `mxr-${name}-start`;
-    const move = `mxr-${name}-move`;
-    const end = `mxr-${name}-end`;
+    const start = `ixr-${name}-start`;
+    const move = `ixr-${name}-move`;
+    const end = `ixr-${name}-end`;
 
     if (state && !this.states[name]) {
       this.states[name] = true;
@@ -42,10 +42,10 @@ AFRAME.registerComponent("mxr-gesture-detector", {
     Object.keys(this.states).forEach((pose) => {
       if (this.states[pose]) {
         this.states[pose] = false;
-        this.el.emit(`mxr-${pose}-end`);
+        this.el.emit(`ixr-${pose}-end`);
       }
     });
-    this.el.emit("mxr-hand-lost");
+    this.el.emit("ixr-hand-lost");
   },
 
   distance(a, b) {
@@ -54,7 +54,7 @@ AFRAME.registerComponent("mxr-gesture-detector", {
 
   // a lógica acompanha rigorosamente o modelo visual físico
   getWorldPosition(landmark) {
-    const cal = window.MXRCalibration;
+    const cal = window.ixrCalibration;
     if (!cal) return null;
 
     return {

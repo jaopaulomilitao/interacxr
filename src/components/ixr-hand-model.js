@@ -1,4 +1,4 @@
-AFRAME.registerComponent("mxr-hand-model", {
+AFRAME.registerComponent("ixr-hand-model", {
   schema: {
     source: { type: "selector" },
     jointRadius: { default: 0.012 },
@@ -49,16 +49,16 @@ AFRAME.registerComponent("mxr-hand-model", {
       this.bones.push(mesh);
     });
 
-    this.data.source.addEventListener("mxr-hand-data", this.onHandData);
+    this.data.source.addEventListener("ixr-hand-data", this.onHandData);
   },
 
   remove() {
-    this.data.source.removeEventListener("mxr-hand-data", this.onHandData);
+    this.data.source.removeEventListener("ixr-hand-data", this.onHandData);
   },
 
   // a função foi purificada para utilizar exclusivamente proporções físicas rígidas
   mapPoint(lm) {
-    const cal = window.MXRCalibration;
+    const cal = window.ixrCalibration;
     const x = (lm.x - 0.5) * cal.planeWidth;
     const y = -(lm.y - 0.5) * cal.planeHeight;
     const z = -cal.baseDepth + (lm.z * cal.planeWidth);

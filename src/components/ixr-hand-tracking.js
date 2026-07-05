@@ -1,4 +1,4 @@
-AFRAME.registerComponent("mxr-hand-tracking", {
+AFRAME.registerComponent("ixr-hand-tracking", {
   schema: {
     maxHands: { type: "int", default: 1 },
     delegate: { type: "string", default: "GPU" },
@@ -10,7 +10,7 @@ AFRAME.registerComponent("mxr-hand-tracking", {
     this.stream = null;
 
     // a calibração agora baseia-se num plano físico em metros, ignorando o fov virtual
-    window.MXRCalibration = {
+    window.ixrCalibration = {
       baseDepth: 0.5,
       planeWidth: 0.8,
       planeHeight: 0.45
@@ -26,7 +26,7 @@ AFRAME.registerComponent("mxr-hand-tracking", {
 
       if (type !== "RESULT") return;
 
-      this.el.emit("mxr-hand-data", {
+      this.el.emit("ixr-hand-data", {
         landmarks: landmarks?.length ? landmarks[0] : null,
       });
 
@@ -65,8 +65,8 @@ AFRAME.registerComponent("mxr-hand-tracking", {
         const aspect = max / min; 
         
         // um quadro de 45 centímetros de altura é projetado a 0.5m de distância
-        window.MXRCalibration.planeHeight = 0.45;
-        window.MXRCalibration.planeWidth = 0.45 * aspect;
+        window.ixrCalibration.planeHeight = 0.45;
+        window.ixrCalibration.planeWidth = 0.45 * aspect;
 
         await this.videoElement.play();
         this.el.sceneEl.enterVR?.();
@@ -77,7 +77,7 @@ AFRAME.registerComponent("mxr-hand-tracking", {
         }, 500);
       };
     } catch (err) {
-      console.error("[mxr-hand-tracking] Camera init failed:", err);
+      console.error("[ixr-hand-tracking] Camera init failed:", err);
     }
   },
 
@@ -95,7 +95,7 @@ AFRAME.registerComponent("mxr-hand-tracking", {
         [bitmap],
       );
     } catch (err) {
-      console.warn("[mxr-hand-tracking] Frame skipped:", err);
+      console.warn("[ixr-hand-tracking] Frame skipped:", err);
       this.isProcessing = false;
     }
   },

@@ -1,4 +1,4 @@
-AFRAME.registerComponent("mxr-hud", {
+AFRAME.registerComponent("ixr-hud", {
   schema: {
     position: {
       default: "0 -0.5 -1",
@@ -96,10 +96,10 @@ AFRAME.registerComponent("mxr-hud", {
 
     this.el.appendChild(this.debug);
 
-    window.MXRHUD = this;
+    window.ixrHUD = this;
 
     window.addEventListener(
-      "mxr-mode-change",
+      "ixr-mode-change",
 
       this.onModeChange.bind(this),
     );
