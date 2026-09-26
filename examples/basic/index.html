@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InteracXR Toolkit - Scenario Test</title>
+  
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script type="module" src="../../src/index.js"></script>
+  
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+  </style>
+</head>
+<body>
+
+  <a-scene xr-mode-ui="enabled:false" background="color:#111" renderer="colorManagement:true">
+    <a-assets>
+      <a-asset-item id="scenario" src="assets/scenario-interacxr.glb"></a-asset-item>
+    </a-assets>
+    
+    <a-entity gltf-model="#scenario" position="-6 0 0" scale="0.5 0.5 0.5" class="navmesh"></a-entity>
+
+    <a-box class="grabbable" position="-12.5 4.8 -4" color="#FFD700" scale="0.5 0.5 0.5"></a-box>
+    
+    <a-cylinder class="grabbable" position="-11.5 4.1 -4" color="#00FF00" scale="0.2 0.2 0.2"></a-cylinder>
+    
+    <a-torus class="grabbable" position="-10.5 5.0 -4" color="#FF00FF" arc="360" radius="0.25" radius-tubular="0.03" rotation="-90 0 0"></a-torus>
+
+    <a-sky color="#87CEEB"></a-sky>
+    <!-- <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#808080" material="roughness:1;metalness:0"></a-plane> -->
+    <a-grid position="0 0.01 0"></a-grid>
+
+    <a-entity id="interaction-hub" position="0 1.5 -1">
+      <a-box id="door" position="-2.3 1 1" rotation="0 90 0" scale="4 3.5 0.2" color="#555"></a-box>
+      <a-cylinder id="door-button" class="interactable" position="1.4 1 0.15" rotation="0 0 90" scale="0.2 0.1 0.2" color="red"></a-cylinder>
+    </a-entity>
+
+    <a-entity id="camera-rig" position="0 1.6 0">
+      <a-camera position="0 0 0" ixr-standard-setup="rig: #camera-rig"></a-camera>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    let hasInteracted = false; 
+
+    document.querySelector("a-scene").addEventListener("loaded", () => {
+      initInteractionSystem();
+      fixScaleReset(); // Função de segurança para o encolhimento
+    });
+
+    function initInteractionSystem() {
+      const button = document.getElementById("door-button");
+      const door = document.getElementById("door");
+
+      button.addEventListener("click", () => {
+        if (hasInteracted) return;
+        hasInteracted = true;
+        handleButtonPress(button, door);
+      });
+    }
+
+    // Função de segurança: toda vez que um objeto interativo for clicado, 
+    // forçamos o reset da escala após a animação do addon terminar
+    function fixScaleReset() {
+      document.querySelectorAll('.interactable').forEach(el => {
+        el.addEventListener('click', () => {
+          setTimeout(() => {
+            el.setAttribute('scale', '0.2 0.1 0.2'); // Force o valor original do botão aqui
+          }, 200); 
+        });
+      });
+    }
+
+    function handleButtonPress(buttonEl, doorEl) {
+      buttonEl.setAttribute("color", "#8B0000"); 
+      triggerDoorAnimation(doorEl);
+    }
+
+    function triggerDoorAnimation(doorEl) {
+      if (doorEl.getAttribute("animation__open")) return;
+      doorEl.setAttribute("animation__open", {
+        property: "position",
+        to: "-2.3 -2.5 1", 
+        dur: 2000,
+        easing: "easeInOutQuad"
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+#start-screen {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: #222; color: white; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; z-index: 10000; font-family: sans-serif;
+}
+#start-btn {
+  padding: 15px 30px; font-size: 18px; cursor: pointer; background: #4CC3D9; border: none; border-radius: 5px; color: #fff; font-weight: bold;
+}
+#debug-panel {
+  position: absolute; top: 10px; left: 10px; background: rgba(0, 0, 0, 0.8);
+  color: white; padding: 15px; border-radius: 8px; z-index: 9999; font-family: monospace; pointer-events: auto;
+}
+.slider-group { margin-bottom: 10px; }
+.slider-group label { display: block; margin-bottom: 5px; }
